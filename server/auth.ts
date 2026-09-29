@@ -1,6 +1,6 @@
 import crypto from 'crypto';
-import { Request, Response, NextFunction } from 'express';
-import { db } from './db';
+import type { Request, Response, NextFunction } from 'express';
+import { db } from './db.ts';
 
 export interface AdminSession {
   token: string;
@@ -100,29 +100,83 @@ export function verifyMasterSecret(providedSecret: string, targetSecret?: string
   return false;
 }
 
+// Secret helper for token generation and signing
+function getAuthSecret(): string {
+  return (
+    process.env.AUTH_SECRET ||
+    process.env.ADMIN_MASTER_SECRET ||
+    'ma-group-auth-secret-session-salt'
+  );
+}
+
 export function createAdminSession(username: string, role: 'superadmin' | 'admin' = 'superadmin'): AdminSession {
-  const token = crypto.randomBytes(32).toString('hex');
   const now = Date.now();
+  const expiresAt = now + 24 * 60 * 60 * 1000; // 24 hours
+  const payloadObj = { username, role, createdAt: now, expiresAt };
+  const payloadStr = Buffer.from(JSON.stringify(payloadObj)).toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', getAuthSecret())
+    .update(payloadStr)
+    .digest('base64url');
+  const token = `${payloadStr}.${signature}`;
+
   const session: AdminSession = {
     token,
     role,
     username,
     createdAt: now,
-    expiresAt: now + 24 * 60 * 60 * 1000, // 24 hours
+    expiresAt,
   };
   adminSessions.set(token, session);
   return session;
 }
 
 export function getAdminSession(token: string | undefined): AdminSession | null {
-  if (!token) return null;
-  const session = adminSessions.get(token);
-  if (!session) return null;
-  if (Date.now() > session.expiresAt) {
-    adminSessions.delete(token);
-    return null;
+  if (!token || typeof token !== 'string') return null;
+
+  // 1. Quick in-memory cache check
+  const cached = adminSessions.get(token);
+  if (cached) {
+    if (Date.now() > cached.expiresAt) {
+      adminSessions.delete(token);
+      return null;
+    }
+    return cached;
   }
-  return session;
+
+  // 2. Stateless HMAC token verification for serverless invocations
+  try {
+    const parts = token.split('.');
+    if (parts.length === 2) {
+      const [payloadStr, signature] = parts;
+      const expectedSignature = crypto
+        .createHmac('sha256', getAuthSecret())
+        .update(payloadStr)
+        .digest('base64url');
+
+      const bufProvided = Buffer.from(signature);
+      const bufExpected = Buffer.from(expectedSignature);
+      if (bufProvided.length === bufExpected.length && crypto.timingSafeEqual(bufProvided, bufExpected)) {
+        const decoded = JSON.parse(Buffer.from(payloadStr, 'base64url').toString('utf-8'));
+        if (decoded && decoded.expiresAt && Date.now() <= decoded.expiresAt) {
+          const session: AdminSession = {
+            token,
+            role: decoded.role === 'admin' ? 'admin' : 'superadmin',
+            username: decoded.username || 'Administrator',
+            createdAt: decoded.createdAt || Date.now(),
+            expiresAt: decoded.expiresAt,
+          };
+          // Cache in current lambda instance
+          adminSessions.set(token, session);
+          return session;
+        }
+      }
+    }
+  } catch {
+    // Malformed token, treat as invalid
+  }
+
+  return null;
 }
 
 export function revokeAdminSession(token: string): void {

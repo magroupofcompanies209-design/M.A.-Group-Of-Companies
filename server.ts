@@ -1,8 +1,8 @@
-import express, { Request, Response } from 'express';
+import express, { type Request, type Response } from 'express';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import dotenv from 'dotenv';
-import { db } from './server/db';
+import { db } from './server/db.ts';
 import {
   checkRateLimit,
   registerLoginFailure,
@@ -13,9 +13,9 @@ import {
   revokeAdminSession,
   requireAdminAuth,
   requireSuperAdminAuth,
-} from './server/auth';
-import { askShoppingAssistant, generateAdminCopy } from './server/gemini';
-import { Order, OrderStatus, Product } from './src/types';
+} from './server/auth.ts';
+import { askShoppingAssistant, generateAdminCopy } from './server/gemini.ts';
+import type { Order, OrderStatus, Product } from './src/types/index.ts';
 
 dotenv.config();
 
@@ -25,12 +25,48 @@ const isProduction = process.env.NODE_ENV === 'production';
 
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
+app.use((req, _res, next) => {
+  if (!req.body || typeof req.body !== 'object') {
+    req.body = {};
+  }
+  next();
+});
+
+// CORS & Preflight handling
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-token, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
 
 // Security Headers middleware
 app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('X-XSS-Protection', '1; mode=block');
+  next();
+});
+
+// URL Normalization for Netlify Functions & Serverless Redirects
+app.use((req, _res, next) => {
+  if (req.url.startsWith('/.netlify/functions/api')) {
+    const remainder = req.url.slice('/.netlify/functions/api'.length);
+    req.url = remainder.startsWith('/api')
+      ? remainder
+      : remainder.startsWith('/')
+      ? `/api${remainder}`
+      : `/api/${remainder}`;
+  } else if (
+    (process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT) &&
+    !req.url.startsWith('/api')
+  ) {
+    req.url = `/api${req.url.startsWith('/') ? req.url : `/${req.url}`}`;
+  }
   next();
 });
 
@@ -841,11 +877,29 @@ app.get('/api/database/status', async (_req: Request, res: Response) => {
   }
 });
 
+// 404 handler for API routes - ALWAYS returns JSON
+app.all('/api/*', (req: Request, res: Response) => {
+  return res.status(404).json({
+    error: 'NotFound',
+    message: `API endpoint ${req.method} ${req.originalUrl || req.url} does not exist.`,
+  });
+});
+
+// Global Express Error Handler - ALWAYS returns JSON
+app.use((err: any, _req: Request, res: Response, _next: any) => {
+  console.error('[API Server Error]:', err);
+  const status = typeof err?.status === 'number' ? err.status : 500;
+  return res.status(status).json({
+    error: err?.name || 'InternalServerError',
+    message: err?.message || 'An unexpected server error occurred.',
+  });
+});
+
 // ==========================================
 // 14. VITE FRONTEND MIDDLEWARE & STATIC SERVING
 // ==========================================
 
-async function startServer() {
+export async function startServer() {
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
@@ -866,6 +920,21 @@ async function startServer() {
   });
 }
 
-startServer().catch((err) => {
-  console.error('Fatal error starting server:', err);
-});
+// Automatically start server only when executed directly via node or tsx
+const isDirectExecution = (): boolean => {
+  if (process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT) {
+    return false;
+  }
+  const mainScript = process.argv[1];
+  if (!mainScript) return false;
+  return /(?:^|[\\/])server\.(?:ts|js|mjs|cjs)$/.test(mainScript);
+};
+
+if (isDirectExecution()) {
+  startServer().catch((err) => {
+    console.error('Fatal error starting server:', err);
+  });
+}
+
+export { app };
+export default app;

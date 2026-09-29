@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import { db } from './db';
+import { db } from './db.ts';
 
 const apiKey = process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '';
 

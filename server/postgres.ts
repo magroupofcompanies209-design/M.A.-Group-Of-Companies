@@ -1,6 +1,6 @@
-import { Pool, PoolConfig } from 'pg';
+import { Pool, type PoolConfig } from 'pg';
 import dotenv from 'dotenv';
-import {
+import type {
   Product,
   Category,
   Brand,
@@ -11,7 +11,7 @@ import {
   StoreSettings,
   B2BInquiry,
   AuditLog,
-} from '../src/types/index';
+} from '../src/types/index.ts';
 
 dotenv.config();
 

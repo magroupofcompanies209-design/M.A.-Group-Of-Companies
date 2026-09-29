@@ -1319,6 +1319,62 @@
   "inquiries": [],
   "auditLogs": [
     {
+      "id": "log-1790679517349-5oz0",
+      "action": "ADMIN_LOGIN_FAILED",
+      "performedBy": "MasterSecretAttempt",
+      "details": "Invalid administrator credentials supplied",
+      "timestamp": "2026-09-29T10:58:37.349Z",
+      "ipAddress": "unknown"
+    },
+    {
+      "id": "log-1790679511167-wno5",
+      "action": "ADMIN_LOGIN_FAILED",
+      "performedBy": "MasterSecretAttempt",
+      "details": "Invalid administrator credentials supplied",
+      "timestamp": "2026-09-29T10:58:31.167Z",
+      "ipAddress": "unknown"
+    },
+    {
+      "id": "log-1790679052271-a7aj",
+      "action": "ADMIN_LOGIN_SUCCESS",
+      "performedBy": "Superadmin",
+      "details": "Authenticated via Master Secret with full access",
+      "timestamp": "2026-09-29T10:50:52.271Z",
+      "ipAddress": "127.0.0.1"
+    },
+    {
+      "id": "log-1790679040239-i9pp",
+      "action": "ADMIN_LOGIN_SUCCESS",
+      "performedBy": "Superadmin",
+      "details": "Authenticated via Master Secret with full access",
+      "timestamp": "2026-09-29T10:50:40.239Z",
+      "ipAddress": "unknown"
+    },
+    {
+      "id": "log-1790679029706-6keq",
+      "action": "ADMIN_LOGIN_SUCCESS",
+      "performedBy": "Superadmin",
+      "details": "Authenticated via Master Secret with full access",
+      "timestamp": "2026-09-29T10:50:29.706Z",
+      "ipAddress": "unknown"
+    },
+    {
+      "id": "log-1790679029699-7xxx",
+      "action": "ADMIN_LOGIN_FAILED",
+      "performedBy": "MasterSecretAttempt",
+      "details": "Invalid administrator credentials supplied",
+      "timestamp": "2026-09-29T10:50:29.699Z",
+      "ipAddress": "unknown"
+    },
+    {
+      "id": "log-1790675277914-mhz4",
+      "action": "ADMIN_LOGIN_SUCCESS",
+      "performedBy": "Superadmin",
+      "details": "Authenticated via Master Secret with full access",
+      "timestamp": "2026-09-29T09:47:57.914Z",
+      "ipAddress": "127.0.0.1"
+    },
+    {
       "id": "log-1790590986725-ib1g",
       "action": "DELETE_PRODUCT",
       "performedBy": "M.A. Master Administrator (Super Admin)",

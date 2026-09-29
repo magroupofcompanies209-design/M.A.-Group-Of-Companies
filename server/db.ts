@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import {
+import type {
   Product,
   Category,
   Brand,
@@ -14,8 +14,8 @@ import {
   User,
   StaffUser,
   AdminSecuritySettings,
-} from '../src/types/index';
-import { postgresManager, DatabaseStatus } from './postgres';
+} from '../src/types/index.ts';
+import { postgresManager, type DatabaseStatus } from './postgres.ts';
 
 interface DatabaseSchema {
   products: Product[];
