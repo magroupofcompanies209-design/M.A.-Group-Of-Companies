@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useStore } from '../context/StoreContext';
+import { safeJsonResponse } from '../utils/api';
 import {
   Product,
   Category,
@@ -151,7 +152,7 @@ export const AdminDashboard: React.FC = () => {
     }
 
     fetch('/api/auth/admin-verify', { headers, credentials: 'include' })
-      .then((r) => r.json())
+      .then((r) => safeJsonResponse(r, { authenticated: false }))
       .then((data) => {
         if (data.authenticated) {
           setIsAuthenticated(true);
@@ -172,13 +173,13 @@ export const AdminDashboard: React.FC = () => {
   const loadAdminData = async () => {
     try {
       const [ordRes, banRes, coupRes, inqRes, logRes, anaRes, setRes] = await Promise.all([
-        adminFetch('/api/orders').then((r) => r.json()),
-        adminFetch('/api/banners').then((r) => r.json()),
-        adminFetch('/api/coupons').then((r) => r.json()),
-        adminFetch('/api/inquiries').then((r) => r.json()),
-        adminFetch('/api/admin/audit-logs').then((r) => r.json()),
-        adminFetch('/api/admin/analytics').then((r) => r.json()),
-        adminFetch('/api/settings').then((r) => r.json()),
+        adminFetch('/api/orders').then((r) => safeJsonResponse(r, [])),
+        adminFetch('/api/banners').then((r) => safeJsonResponse(r, [])),
+        adminFetch('/api/coupons').then((r) => safeJsonResponse(r, [])),
+        adminFetch('/api/inquiries').then((r) => safeJsonResponse(r, [])),
+        adminFetch('/api/admin/audit-logs').then((r) => safeJsonResponse(r, [])),
+        adminFetch('/api/admin/analytics').then((r) => safeJsonResponse(r, {})),
+        adminFetch('/api/settings').then((r) => safeJsonResponse(r, {})),
       ]);
 
       if (Array.isArray(ordRes)) setOrders(ordRes);
@@ -191,7 +192,7 @@ export const AdminDashboard: React.FC = () => {
 
       // Load security if superadmin or admin
       adminFetch('/api/admin/security')
-        .then((r) => r.json())
+        .then((r) => safeJsonResponse(r, null))
         .then((secData) => {
           if (secData && !secData.error) {
             setSecuritySettings(secData);
@@ -223,7 +224,11 @@ export const AdminDashboard: React.FC = () => {
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const data = await safeJsonResponse(res, {
+        error: 'Authentication failed',
+        message: `Server returned non-JSON response (${res.status}). Verify Netlify Functions are active.`,
+      });
+
       if (!res.ok || data.error) {
         throw new Error(data.message || data.error || 'Authentication failed.');
       }
@@ -479,7 +484,7 @@ export const AdminDashboard: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ newSecret: newMasterSecret }),
       });
-      const data = await res.json();
+      const data = await safeJsonResponse(res, { error: 'Failed to update Master Secret' });
       if (!res.ok) throw new Error(data.error || 'Failed to update Master Secret');
 
       setMasterSecretSuccess('Master Secret updated successfully! Remember to use this new secret on next login.');
@@ -511,7 +516,7 @@ export const AdminDashboard: React.FC = () => {
         body: JSON.stringify(editingStaff),
       });
 
-      const data = await res.json();
+      const data = await safeJsonResponse(res, { error: 'Failed to save staff' });
       if (!res.ok) throw new Error(data.error || 'Failed to save staff');
 
       setIsStaffModalOpen(false);
@@ -549,12 +554,16 @@ export const AdminDashboard: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, paymentStatus, trackingNumber, courierName }),
       });
-      const updated = await res.json();
-      setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
-      if (selectedOrder && selectedOrder.id === orderId) {
-        setSelectedOrder(updated);
+      const updated = await safeJsonResponse(res, null);
+      if (updated && !updated.error) {
+        setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
+        if (selectedOrder && selectedOrder.id === orderId) {
+          setSelectedOrder(updated);
+        }
+        showToast(`Order status updated to "${status}".`, 'success');
+      } else {
+        showToast('Failed to update status.', 'error');
       }
-      showToast(`Order status updated to "${status}".`, 'success');
     } catch {
       showToast('Failed to update status.', 'error');
     }
@@ -571,7 +580,7 @@ export const AdminDashboard: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: aiPrompt, type: aiType }),
       });
-      const data = await res.json();
+      const data = await safeJsonResponse(res, { result: 'Error generating AI insight.' });
       setAiResult(data.result);
     } catch {
       setAiResult('Error generating AI insight.');

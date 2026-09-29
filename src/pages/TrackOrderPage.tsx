@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { safeJsonResponse } from '../utils/api';
 import { Order, OrderStatus } from '../types';
 import {
   Truck,
@@ -44,7 +45,7 @@ export const TrackOrderPage: React.FC = () => {
         phoneInput.trim() ? `?phone=${encodeURIComponent(phoneInput.trim())}` : ''
       }`;
       const res = await fetch(url);
-      const data = await res.json();
+      const data = await safeJsonResponse(res, { error: 'Order not found.' });
 
       if (!res.ok || data.error) {
         throw new Error(data.error || 'Order not found.');

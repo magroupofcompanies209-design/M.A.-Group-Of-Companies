@@ -1319,6 +1319,30 @@
   "inquiries": [],
   "auditLogs": [
     {
+      "id": "log-1790682328870-zif0",
+      "action": "ADMIN_LOGIN_FAILED",
+      "performedBy": "MasterSecretAttempt",
+      "details": "Invalid administrator credentials supplied",
+      "timestamp": "2026-09-29T11:45:28.870Z",
+      "ipAddress": "127.0.0.1"
+    },
+    {
+      "id": "log-1790682310701-lac7",
+      "action": "ADMIN_LOGIN_FAILED",
+      "performedBy": "MasterSecretAttempt",
+      "details": "Invalid administrator credentials supplied",
+      "timestamp": "2026-09-29T11:45:10.701Z",
+      "ipAddress": "unknown"
+    },
+    {
+      "id": "log-1790682310693-jpf8",
+      "action": "ADMIN_LOGIN_FAILED",
+      "performedBy": "MasterSecretAttempt",
+      "details": "Invalid administrator credentials supplied",
+      "timestamp": "2026-09-29T11:45:10.693Z",
+      "ipAddress": "unknown"
+    },
+    {
       "id": "log-1790679517349-5oz0",
       "action": "ADMIN_LOGIN_FAILED",
       "performedBy": "MasterSecretAttempt",

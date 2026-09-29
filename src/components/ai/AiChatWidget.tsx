@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../../context/StoreContext';
+import { safeJsonResponse } from '../../utils/api';
 import {
   Sparkles,
   X,
@@ -86,7 +87,9 @@ export const AiChatWidget: React.FC = () => {
         body: JSON.stringify({ message: query, history }),
       });
 
-      const data = await res.json();
+      const data = await safeJsonResponse(res, {
+        reply: "I'm here to help with all M.A. GROUP OF COMPANIES products across Pakistan. Please let me know your specifications!",
+      });
       const replyText = data.reply || "I'm here to help with all M.A. GROUP OF COMPANIES products across Pakistan. Please let me know your specifications!";
 
       // Extract matching products mentioned in reply or query

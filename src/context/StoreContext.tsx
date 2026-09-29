@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { safeJsonResponse } from '../utils/api';
 import {
   Product,
   Category,
@@ -190,11 +191,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     try {
       setLoading(true);
       const [prodsRes, catsRes, brandsRes, bannersRes, settingsRes] = await Promise.all([
-        fetch('/api/products').then((r) => r.json()),
-        fetch('/api/categories').then((r) => r.json()),
-        fetch('/api/brands').then((r) => r.json()),
-        fetch('/api/banners').then((r) => r.json()),
-        fetch('/api/settings').then((r) => r.json()),
+        fetch('/api/products').then((r) => safeJsonResponse(r, [])),
+        fetch('/api/categories').then((r) => safeJsonResponse(r, [])),
+        fetch('/api/brands').then((r) => safeJsonResponse(r, [])),
+        fetch('/api/banners').then((r) => safeJsonResponse(r, [])),
+        fetch('/api/settings').then((r) => safeJsonResponse(r, {})),
       ]);
 
       if (Array.isArray(prodsRes)) setProducts(prodsRes);
@@ -216,7 +217,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const refreshProducts = async () => {
     try {
       const res = await fetch('/api/products');
-      const data = await res.json();
+      const data = await safeJsonResponse(res, []);
       if (Array.isArray(data)) setProducts(data);
     } catch (e) {
       console.error(e);
@@ -226,7 +227,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const refreshCategories = async () => {
     try {
       const res = await fetch('/api/categories');
-      const data = await res.json();
+      const data = await safeJsonResponse(res, []);
       if (Array.isArray(data)) setCategories(data);
     } catch (e) {
       console.error(e);
@@ -236,7 +237,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const refreshBanners = async () => {
     try {
       const res = await fetch('/api/banners');
-      const data = await res.json();
+      const data = await safeJsonResponse(res, []);
       if (Array.isArray(data)) setBanners(data);
     } catch (e) {
       console.error(e);
@@ -246,7 +247,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const refreshSettings = async () => {
     try {
       const res = await fetch('/api/settings');
-      const data = await res.json();
+      const data = await safeJsonResponse(res, {});
       if (data && !data.error) setSettings(data);
     } catch (e) {
       console.error(e);
@@ -344,7 +345,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, cartSubtotal }),
       });
-      const data = await res.json();
+      const data = await safeJsonResponse(res, { valid: false, message: 'Invalid server response' });
       if (data.valid) {
         setAppliedCoupon({
           code: data.code,

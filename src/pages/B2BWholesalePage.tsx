@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
+import { safeJsonResponse } from '../utils/api';
 import {
   Building2,
   CheckCircle2,
@@ -41,7 +42,7 @@ export const B2BWholesalePage: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       });
-      const data = await res.json();
+      const data = await safeJsonResponse(res, { success: false });
       if (data.success) {
         setSubmittedId(data.inquiryNumber);
         showToast('Your wholesale inquiry has been submitted! Our project team will contact you shortly.', 'success');

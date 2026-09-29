@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
+import { safeJsonResponse } from '../utils/api';
 import {
   ShieldCheck,
   Truck,
@@ -152,7 +153,7 @@ export const CheckoutPage: React.FC = () => {
         body: JSON.stringify(orderPayload),
       });
 
-      const data = await res.json();
+      const data = await safeJsonResponse(res, { error: 'Failed to place order.' });
 
       if (!res.ok || data.error) {
         throw new Error(data.error || 'Failed to place order.');

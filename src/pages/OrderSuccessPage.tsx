@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useStore } from '../context/StoreContext';
+import { safeJsonResponse } from '../utils/api';
 import { Order } from '../types';
 import {
   CheckCircle2,
@@ -20,9 +21,9 @@ export const OrderSuccessPage: React.FC = () => {
   useEffect(() => {
     if (!orderNumber) return;
     fetch(`/api/orders/track/${orderNumber}`)
-      .then((r) => r.json())
+      .then((r) => safeJsonResponse(r, null))
       .then((data) => {
-        if (!data.error) setOrder(data);
+        if (data && !data.error) setOrder(data);
       })
       .catch((err) => console.error(err))
       .finally(() => setLoading(false));
