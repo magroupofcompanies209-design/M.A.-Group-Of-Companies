@@ -1,6 +1,43 @@
 {
   "products": [
     {
+      "name": "pipe",
+      "sku": "MAG-8613",
+      "categoryId": "cat-solar",
+      "categoryName": "Solar Products & Equipment",
+      "brand": "Inverex Solar Energy",
+      "price": 25000,
+      "stock": 10,
+      "lowStockThreshold": 2,
+      "warranty": "2 Years Warranty",
+      "description": "vtxtsxvinugctrszrcvnucsztv",
+      "shortDescription": "vtxtsxvinugctrszrcvnucsztv",
+      "images": [
+        "https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=800&q=80"
+      ],
+      "salePrice": 44989,
+      "features": [
+        "High performance",
+        "Official Warranty"
+      ],
+      "specifications": [
+        {
+          "key": "Warranty",
+          "value": "Manufacturer Warranty"
+        }
+      ],
+      "status": "active",
+      "rating": 5,
+      "reviewCount": 1,
+      "id": "prod-1790771099857",
+      "slug": "pipe",
+      "tags": [
+        "products"
+      ],
+      "createdAt": "2026-09-30T12:24:59.857Z",
+      "updatedAt": "2026-09-30T12:24:59.857Z"
+    },
+    {
       "id": "prod-inverex-nitrox-6kw",
       "name": "Inverex Nitrox 6kW Hybrid Solar Inverter (IP65 Dual MPPT)",
       "slug": "inverex-nitrox-6kw-hybrid-solar-inverter",
@@ -1052,6 +1089,15 @@
           "slug": "generators"
         }
       ]
+    },
+    {
+      "name": "hhhh",
+      "description": "",
+      "iconName": "Zap",
+      "subcategories": [],
+      "isActive": true,
+      "id": "cat-1790771193578",
+      "slug": "hhhh"
     }
   ],
   "brands": [
@@ -1318,6 +1364,165 @@
   },
   "inquiries": [],
   "auditLogs": [
+    {
+      "id": "log-1790772142988-zmvn",
+      "action": "DELETE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Deleted product: Inverex Solar Test Panel (Updated Image) (ID: prod-1790772141337)",
+      "timestamp": "2026-09-30T12:42:22.988Z"
+    },
+    {
+      "id": "log-1790772142703-60ik",
+      "action": "UPDATE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Updated product: prod-1790772141337",
+      "timestamp": "2026-09-30T12:42:22.703Z"
+    },
+    {
+      "id": "log-1790772142445-ry89",
+      "action": "UPLOAD_IMAGE",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Uploaded product image to Supabase Storage: solar-panel-test-2-replaced.png",
+      "timestamp": "2026-09-30T12:42:22.445Z"
+    },
+    {
+      "id": "log-1790772142033-k57x",
+      "action": "CREATE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Created product (store): Inverex Solar Test Panel with Uploaded Image (TEST-IMG-1332)",
+      "timestamp": "2026-09-30T12:42:22.033Z"
+    },
+    {
+      "id": "log-1790772141329-powl",
+      "action": "UPLOAD_IMAGE",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Uploaded product image to Supabase Storage: solar-panel-test-1.png",
+      "timestamp": "2026-09-30T12:42:21.329Z"
+    },
+    {
+      "id": "log-1790772140643-8ft5",
+      "action": "ADMIN_LOGIN_SUCCESS",
+      "performedBy": "Superadmin",
+      "details": "Authenticated via Master Secret with full access",
+      "timestamp": "2026-09-30T12:42:20.643Z",
+      "ipAddress": "127.0.0.1"
+    },
+    {
+      "id": "log-1790771789512-fj8g",
+      "action": "DELETE_ORDER",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Deleted order: MAG-3486 (ID: ord-1790771789374)",
+      "timestamp": "2026-09-30T12:36:29.512Z"
+    },
+    {
+      "id": "log-1790771789384-bd6v",
+      "action": "NEW_ORDER_COD",
+      "performedBy": "Test Customer Delete",
+      "details": "New order MAG-3486 placed for Rs. 10,000 COD.",
+      "timestamp": "2026-09-30T12:36:29.384Z"
+    },
+    {
+      "id": "log-1790771789359-85ob",
+      "action": "DELETE_CATEGORY",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Deleted category: Temp Deletable Category 8785 (ID: cat-1790771788791)",
+      "timestamp": "2026-09-30T12:36:29.359Z"
+    },
+    {
+      "id": "log-1790771789251-6ukk",
+      "action": "DELETE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Deleted product: Bound Product in Temp Deletable Category 8785 (ID: prod-1790771788799)",
+      "timestamp": "2026-09-30T12:36:29.251Z"
+    },
+    {
+      "id": "log-1790771789141-3cjb",
+      "action": "CREATE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Created product (store): Bound Product in Temp Deletable Category 8785 (BOUND-8795)",
+      "timestamp": "2026-09-30T12:36:29.141Z"
+    },
+    {
+      "id": "log-1790771788791-7f99",
+      "action": "CREATE_CATEGORY",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Created category: Temp Deletable Category 8785",
+      "timestamp": "2026-09-30T12:36:28.791Z"
+    },
+    {
+      "id": "log-1790771788774-2qt8",
+      "action": "DELETE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Deleted product: Test Solar Equipment for Deletion (ID: prod-1790771788034)",
+      "timestamp": "2026-09-30T12:36:28.774Z"
+    },
+    {
+      "id": "log-1790771788525-etg1",
+      "action": "CREATE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Created product (store): Test Solar Equipment for Deletion (TEST-DEL-8030)",
+      "timestamp": "2026-09-30T12:36:28.525Z"
+    },
+    {
+      "id": "log-1790771787360-6jc5",
+      "action": "ADMIN_LOGIN_SUCCESS",
+      "performedBy": "Superadmin",
+      "details": "Authenticated via Master Secret with full access",
+      "timestamp": "2026-09-30T12:36:27.360Z",
+      "ipAddress": "127.0.0.1"
+    },
+    {
+      "id": "log-1790771193579-vqli",
+      "action": "CREATE_CATEGORY",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Created category: hhhh",
+      "timestamp": "2026-09-30T12:26:33.579Z"
+    },
+    {
+      "id": "log-1790771100758-s3xr",
+      "action": "CREATE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Created product (store): pipe (MAG-8613)",
+      "timestamp": "2026-09-30T12:25:00.758Z"
+    },
+    {
+      "id": "log-1790771060127-4b3w",
+      "action": "ADMIN_LOGIN_SUCCESS",
+      "performedBy": "Superadmin",
+      "details": "Authenticated via Master Secret with full access",
+      "timestamp": "2026-09-30T12:24:20.127Z",
+      "ipAddress": "127.0.0.1"
+    },
+    {
+      "id": "log-1790769527137-wdvx",
+      "action": "DELETE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Deleted product ID: prod-1790769527131",
+      "timestamp": "2026-09-30T11:58:47.137Z"
+    },
+    {
+      "id": "log-1790769527132-6u40",
+      "action": "CREATE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Created product: Test Persistent Solar Panel 550W (TEST-SOLAR-550)",
+      "timestamp": "2026-09-30T11:58:47.132Z"
+    },
+    {
+      "id": "log-1790769527120-40f5",
+      "action": "ADMIN_LOGIN_SUCCESS",
+      "performedBy": "Superadmin",
+      "details": "Authenticated via Master Secret with full access",
+      "timestamp": "2026-09-30T11:58:47.120Z",
+      "ipAddress": "unknown"
+    },
+    {
+      "id": "log-1790769517882-7mbv",
+      "action": "ADMIN_LOGIN_FAILED",
+      "performedBy": "MasterSecretAttempt",
+      "details": "Invalid administrator credentials supplied",
+      "timestamp": "2026-09-30T11:58:37.882Z",
+      "ipAddress": "unknown"
+    },
     {
       "id": "log-1790682328870-zif0",
       "action": "ADMIN_LOGIN_FAILED",

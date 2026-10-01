@@ -19,15 +19,73 @@ import {
   ReturnPolicyPage,
   FaqPage,
 } from './pages/StaticPages';
-import { AdminDashboard } from './admin/AdminDashboard';
-import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Info, X, Wrench, MessageCircle } from 'lucide-react';
+
+const AdminDashboard = React.lazy(() =>
+  import('./admin/AdminDashboard').then((m) => ({ default: m.AdminDashboard }))
+);
 
 const MainRouter: React.FC = () => {
-  const { currentRoute, toasts, removeToast } = useStore();
+  const { currentRoute, toasts, removeToast, settings, navigate } = useStore();
 
   // If in Secure Admin or Admin route, render Admin Dashboard isolated from public header/footer
   if (currentRoute === 'secure-admin' || currentRoute === 'admin') {
-    return <AdminDashboard />;
+    return (
+      <React.Suspense
+        fallback={
+          <div className="min-h-screen bg-neutral-950 flex flex-col items-center justify-center text-white">
+            <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
+            <p className="mt-4 text-xs tracking-widest text-neutral-400 uppercase font-mono">
+              Loading M.A. Group Admin Portal...
+            </p>
+          </div>
+        }
+      >
+        <AdminDashboard />
+      </React.Suspense>
+    );
+  }
+
+  // Maintenance mode handling
+  if (settings?.maintenanceMode) {
+    return (
+      <div className="min-h-screen bg-neutral-950 text-white flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-6">
+          <Wrench className="w-8 h-8" />
+        </div>
+        <div className="flex items-center gap-3 mb-2">
+          <span className="font-extrabold text-white text-2xl uppercase tracking-tight">
+            M.A. Group of Companies
+          </span>
+        </div>
+        <p className="text-amber-500 font-semibold tracking-wider uppercase text-xs mb-4">
+          Under Scheduled Maintenance
+        </p>
+        <p className="max-w-md text-neutral-400 text-sm mb-8 leading-relaxed">
+          {settings?.maintenanceMessage ||
+            'We are currently performing routine catalog and inventory synchronization to better serve our nationwide customers. Please check back shortly.'}
+        </p>
+        <div className="flex flex-col sm:flex-row items-center gap-4">
+          {settings?.whatsappNumber && (
+            <a
+              href={`https://wa.me/${settings.whatsappNumber.replace(/[^0-9]/g, '')}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>Contact via WhatsApp</span>
+            </a>
+          )}
+          <button
+            onClick={() => navigate('admin')}
+            className="text-xs text-neutral-500 hover:text-neutral-300 underline font-mono"
+          >
+            Staff / Administrator Access
+          </button>
+        </div>
+      </div>
+    );
   }
 
   const renderCurrentView = () => {

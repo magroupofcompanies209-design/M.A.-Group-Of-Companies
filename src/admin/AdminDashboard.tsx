@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../context/StoreContext';
 import { safeJsonResponse } from '../utils/api';
 import {
@@ -44,6 +44,11 @@ import {
   ShieldAlert,
   UserPlus,
   ArrowLeft,
+  Database,
+  Upload,
+  Image as ImageIcon,
+  Clock,
+  Printer,
 } from 'lucide-react';
 
 export const AdminDashboard: React.FC = () => {
@@ -85,14 +90,38 @@ export const AdminDashboard: React.FC = () => {
   const [analytics, setAnalytics] = useState<any>(null);
   const [adminSettings, setAdminSettings] = useState<StoreSettings | null>(null);
   const [securitySettings, setSecuritySettings] = useState<AdminSecuritySettings | null>(null);
+  const [dbStatus, setDbStatus] = useState<any>(null);
+
+  // Item Deletion Confirmation Modal State
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{
+    type: 'product' | 'category' | 'order' | 'banner' | 'coupon' | 'inquiry' | 'staff';
+    id: string;
+    title: string;
+    subtitle?: string;
+    warning?: string;
+    blocked?: boolean;
+    productCount?: number;
+  } | null>(null);
+  const [isDeletingItem, setIsDeletingItem] = useState(false);
+  const [deleteModalError, setDeleteModalError] = useState<string | null>(null);
 
   // Product Edit/Add Modal
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [imageUploadError, setImageUploadError] = useState<string | null>(null);
+  const [showUrlInput, setShowUrlInput] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Category Edit/Add Modal
   const [editingCategory, setEditingCategory] = useState<Partial<Category> | null>(null);
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
+  const [isUploadingCategoryImage, setIsUploadingCategoryImage] = useState(false);
+  const [categoryImageUploadError, setCategoryImageUploadError] = useState<string | null>(null);
+  const [newSubcategoryName, setNewSubcategoryName] = useState('');
+  const categoryFileInputRef = useRef<HTMLInputElement>(null);
 
   // Banner Modal
   const [editingBanner, setEditingBanner] = useState<Partial<HeroBanner> | null>(null);
@@ -121,9 +150,23 @@ export const AdminDashboard: React.FC = () => {
   const [aiResult, setAiResult] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
 
-  // Search in tables
+  // Search & Filters in tables
   const [productSearch, setProductSearch] = useState('');
   const [orderSearch, setOrderSearch] = useState('');
+  const [categorySearch, setCategorySearch] = useState('');
+
+  // Configurable Low Stock Threshold (Default: 5 units)
+  const [lowStockThreshold, setLowStockThreshold] = useState<number>(5);
+
+  // Product Filters
+  const [productCategoryFilter, setProductCategoryFilter] = useState('all');
+  const [productStockFilter, setProductStockFilter] = useState<'all' | 'in_stock' | 'low_stock' | 'out_of_stock'>('all');
+  const [productActiveFilter, setProductActiveFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [productFeaturedFilter, setProductFeaturedFilter] = useState<'all' | 'featured' | 'standard'>('all');
+
+  // Order Filters
+  const [orderStatusFilter, setOrderStatusFilter] = useState('all');
+  const [orderDateFilter, setOrderDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
 
   // Helper for authenticated requests
   const adminFetch = async (url: string, options: RequestInit = {}) => {
@@ -189,6 +232,14 @@ export const AdminDashboard: React.FC = () => {
       if (Array.isArray(logRes)) setAuditLogs(logRes);
       if (anaRes && !anaRes.error) setAnalytics(anaRes);
       if (setRes && !setRes.error) setAdminSettings(setRes);
+
+      // Fetch persistent database status
+      adminFetch('/api/database/status')
+        .then((r) => safeJsonResponse(r, null))
+        .then((st) => {
+          if (st && !st.error) setDbStatus(st);
+        })
+        .catch(() => {});
 
       // Load security if superadmin or admin
       adminFetch('/api/admin/security')
@@ -267,13 +318,99 @@ export const AdminDashboard: React.FC = () => {
   };
 
   // Product CRUD
-  const handleSaveProduct = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingProduct || !editingProduct.name || !editingProduct.sku || !editingProduct.price) {
-      showToast('Please provide name, SKU, and price.', 'error');
+  const handleImageFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImageUploadError(null);
+
+    // Validate type: JPG, JPEG, PNG, WEBP
+    const validExtensions = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    const fileExt = file.name.split('.').pop()?.toLowerCase();
+    const isMimeValid =
+      validExtensions.includes(file.type.toLowerCase()) ||
+      ['jpg', 'jpeg', 'png', 'webp'].includes(fileExt || '');
+
+    if (!isMimeValid) {
+      const err = 'Invalid format. Please choose a JPG, JPEG, PNG, or WEBP image file.';
+      setImageUploadError(err);
+      showToast(err, 'error');
+      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
+    if (file.size > 8 * 1024 * 1024) {
+      const err = 'Image file size must be less than 8MB.';
+      setImageUploadError(err);
+      showToast(err, 'error');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setIsUploadingImage(true);
+
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64Data = reader.result as string;
+          const res = await adminFetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              filename: file.name,
+              fileData: base64Data,
+              contentType: file.type || 'image/jpeg',
+            }),
+          });
+
+          const data = await safeJsonResponse(res, { success: false, error: 'Upload failed' });
+          if (!res.ok || !data.success || !data.url) {
+            throw new Error(data.error || 'Failed to upload image to Supabase Storage');
+          }
+
+          // Update image URL in editing product
+          setEditingProduct((prev) => (prev ? { ...prev, images: [data.url] } : null));
+          setImageUploadError(null);
+          showToast('Image uploaded and stored in Supabase Storage.', 'success');
+        } catch (err: any) {
+          const errMsg = err.message || 'Error uploading image to Supabase Storage';
+          setImageUploadError(errMsg);
+          showToast(errMsg, 'error');
+        } finally {
+          setIsUploadingImage(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+      };
+
+      reader.onerror = () => {
+        setIsUploadingImage(false);
+        setImageUploadError('Failed to read image file from device.');
+        showToast('Failed to read image file', 'error');
+      };
+
+      reader.readAsDataURL(file);
+    } catch (err: any) {
+      setIsUploadingImage(false);
+      setImageUploadError(err.message || 'Failed reading image file');
+      showToast(err.message || 'Failed reading image file', 'error');
+    }
+  };
+
+  const handleRemoveImage = () => {
+    setEditingProduct((prev) => (prev ? { ...prev, images: [] } : null));
+    setImageUploadError(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleSaveProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingProduct || !editingProduct.name || !editingProduct.price) {
+      showToast('Please provide product title and price.', 'error');
+      return;
+    }
+
+    setIsSavingProduct(true);
     try {
       const isNew = !editingProduct.id;
       const method = isNew ? 'POST' : 'PUT';
@@ -293,36 +430,231 @@ export const AdminDashboard: React.FC = () => {
         }),
       });
 
-      if (!res.ok) throw new Error('Failed to save product');
+      const resData = await safeJsonResponse(res, null);
+
+      if (!res.ok) {
+        const errorMsg = resData?.error || resData?.message || 'Failed to save product in database.';
+        throw new Error(errorMsg);
+      }
 
       await refreshProducts();
       await loadAdminData();
       setIsProductModalOpen(false);
       setEditingProduct(null);
-      showToast(`Product ${isNew ? 'created' : 'updated'} successfully.`, 'success');
+      showToast(`Product ${isNew ? 'created' : 'updated'} and permanently saved to Supabase.`, 'success');
     } catch (err: any) {
-      showToast(err.message || 'Error saving product', 'error');
+      showToast(err.message || 'Error saving product to database', 'error');
+    } finally {
+      setIsSavingProduct(false);
     }
   };
 
-  const handleDeleteProduct = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this product?')) return;
+  // Prompt Product Deletion Modal
+  const promptDeleteProduct = (p: Product) => {
+    setDeleteModalError(null);
+    setDeleteConfirmation({
+      type: 'product',
+      id: p.id,
+      title: p.name,
+      subtitle: `SKU: ${p.sku} • Price: Rs. ${p.price.toLocaleString()} • Category: ${p.categoryName || p.categoryId}`,
+    });
+  };
+
+  // Prompt Category Deletion Modal with Product Dependency Protection
+  const promptDeleteCategory = (cat: Category) => {
+    setDeleteModalError(null);
+    const relatedProducts = products.filter(
+      (p) => p.categoryId === cat.id || (p.categoryName && p.categoryName.toLowerCase() === cat.name.toLowerCase())
+    );
+    const hasProducts = relatedProducts.length > 0;
+    setDeleteConfirmation({
+      type: 'category',
+      id: cat.id,
+      title: cat.name,
+      subtitle: `Slug: /category/${cat.slug}`,
+      blocked: hasProducts,
+      productCount: relatedProducts.length,
+      warning: hasProducts
+        ? `Cannot delete category "${cat.name}": ${relatedProducts.length} active product(s) in your catalog belong to this category (e.g. "${relatedProducts[0].name}"). To protect your store catalog, please reassign or delete these products first.`
+        : undefined,
+    });
+  };
+
+  const handleDeleteProduct = (id: string) => {
+    const prod = products.find((p) => p.id === id);
+    if (prod) promptDeleteProduct(prod);
+  };
+
+  const handleDeleteCategory = (id: string) => {
+    const cat = categories.find((c) => c.id === id);
+    if (cat) promptDeleteCategory(cat);
+  };
+
+  // Unified Deletion Executor
+  const executeDelete = async () => {
+    if (!deleteConfirmation || deleteConfirmation.blocked) return;
+
+    setIsDeletingItem(true);
+    setDeleteModalError(null);
+
+    const { type, id } = deleteConfirmation;
+
     try {
-      const res = await adminFetch(`/api/products/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete product');
-      await refreshProducts();
-      await loadAdminData();
-      showToast('Product deleted.', 'info');
-    } catch {
-      showToast('Failed to delete product', 'error');
+      let endpoint = '';
+      if (type === 'product') endpoint = `/api/products/${id}`;
+      else if (type === 'category') endpoint = `/api/categories/${id}`;
+      else if (type === 'order') endpoint = `/api/orders/${id}`;
+      else if (type === 'banner') endpoint = `/api/banners/${id}`;
+      else if (type === 'coupon') endpoint = `/api/coupons/${id}`;
+      else if (type === 'inquiry') endpoint = `/api/inquiries/${id}`;
+      else if (type === 'staff') endpoint = `/api/admin/security/staff/${id}`;
+
+      const res = await adminFetch(endpoint, { method: 'DELETE' });
+      const data = await safeJsonResponse(res, null);
+
+      if (!res.ok || (data && data.success === false)) {
+        const errorMsg = data?.error || data?.message || `Failed to delete ${type}. Please check server connection.`;
+        setDeleteModalError(errorMsg);
+        showToast(errorMsg, 'error');
+        setIsDeletingItem(false);
+        return;
+      }
+
+      // Success confirmed by database
+      setDeleteConfirmation(null);
+      setIsDeletingItem(false);
+
+      if (type === 'product') {
+        await refreshProducts();
+        await loadAdminData();
+      } else if (type === 'category') {
+        await refreshCategories();
+        await loadAdminData();
+      } else if (type === 'order') {
+        await loadAdminData();
+        if (selectedOrder && selectedOrder.id === id) setSelectedOrder(null);
+      } else if (type === 'banner') {
+        await refreshBanners();
+        await loadAdminData();
+      } else if (type === 'coupon') {
+        await loadAdminData();
+      } else if (type === 'inquiry') {
+        await loadAdminData();
+      } else if (type === 'staff') {
+        await loadAdminData();
+      }
+
+      showToast('Deleted successfully.', 'success');
+    } catch (err: any) {
+      const errorMsg = err.message || `An error occurred while deleting ${type}.`;
+      setDeleteModalError(errorMsg);
+      showToast(errorMsg, 'error');
+      setIsDeletingItem(false);
     }
   };
 
   // Category CRUD
+  const handleCategoryImageFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.match(/^image\/(jpeg|png|webp|jpg)$/i)) {
+      const err = 'Please select a valid image file (JPG, JPEG, PNG, or WEBP).';
+      setCategoryImageUploadError(err);
+      showToast(err, 'error');
+      if (categoryFileInputRef.current) categoryFileInputRef.current.value = '';
+      return;
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      const err = 'Image file size must be less than 8MB.';
+      setCategoryImageUploadError(err);
+      showToast(err, 'error');
+      if (categoryFileInputRef.current) categoryFileInputRef.current.value = '';
+      return;
+    }
+
+    setIsUploadingCategoryImage(true);
+    setCategoryImageUploadError(null);
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const base64Data = reader.result as string;
+        const res = await adminFetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: `category-${file.name}`,
+            fileData: base64Data,
+            contentType: file.type || 'image/jpeg',
+          }),
+        });
+
+        const data = await safeJsonResponse(res, { success: false, error: 'Upload failed' });
+        if (!res.ok || !data.success || !data.url) {
+          throw new Error(data.error || 'Failed to upload category image to Supabase Storage');
+        }
+
+        setEditingCategory((prev) => (prev ? { ...prev, image: data.url } : null));
+        setCategoryImageUploadError(null);
+        showToast('Category image uploaded to Supabase Storage.', 'success');
+      } catch (err: any) {
+        const errMsg = err.message || 'Error uploading category image to Supabase Storage';
+        setCategoryImageUploadError(errMsg);
+        showToast(errMsg, 'error');
+      } finally {
+        setIsUploadingCategoryImage(false);
+        if (categoryFileInputRef.current) categoryFileInputRef.current.value = '';
+      }
+    };
+
+    reader.onerror = () => {
+      setIsUploadingCategoryImage(false);
+      setCategoryImageUploadError('Failed to read image file from device.');
+      showToast('Failed to read image file', 'error');
+    };
+
+    reader.readAsDataURL(file);
+  };
+
+  const handleAddSubcategory = () => {
+    if (!newSubcategoryName.trim() || !editingCategory) return;
+    const name = newSubcategoryName.trim();
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    const newSub = {
+      id: `sub-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      categoryId: editingCategory.id || 'cat-general',
+      name,
+      slug,
+      description: '',
+      image: '',
+      displayOrder: (editingCategory.subcategories?.length || 0) + 1,
+      isActive: true,
+    };
+    setEditingCategory({
+      ...editingCategory,
+      subcategories: [...(editingCategory.subcategories || []), newSub],
+    });
+    setNewSubcategoryName('');
+  };
+
+  const handleRemoveSubcategory = (subId: string) => {
+    if (!editingCategory) return;
+    setEditingCategory({
+      ...editingCategory,
+      subcategories: (editingCategory.subcategories || []).filter((s) => s.id !== subId),
+    });
+  };
+
   const handleSaveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingCategory || !editingCategory.name) return;
+    if (!editingCategory || !editingCategory.name) {
+      showToast('Category name is required.', 'error');
+      return;
+    }
 
+    setIsSavingCategory(true);
     try {
       const isNew = !editingCategory.id;
       const method = isNew ? 'POST' : 'PUT';
@@ -331,29 +663,27 @@ export const AdminDashboard: React.FC = () => {
       const res = await adminFetch(endpoint, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editingCategory),
+        body: JSON.stringify({
+          ...editingCategory,
+          displayOrder: Number(editingCategory.displayOrder) || 0,
+          isActive: editingCategory.isActive !== false,
+          subcategories: editingCategory.subcategories || [],
+        }),
       });
 
-      if (!res.ok) throw new Error('Failed to save category');
+      if (!res.ok) {
+        const errData = await safeJsonResponse(res, { error: 'Failed to save category' });
+        throw new Error(errData.error || 'Failed to save category');
+      }
 
       await refreshCategories();
       setIsCategoryModalOpen(false);
       setEditingCategory(null);
-      showToast('Category saved successfully.', 'success');
-    } catch {
-      showToast('Failed to save category', 'error');
-    }
-  };
-
-  const handleDeleteCategory = async (id: string) => {
-    if (!confirm('Delete this category?')) return;
-    try {
-      const res = await adminFetch(`/api/categories/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete category');
-      await refreshCategories();
-      showToast('Category deleted.', 'info');
-    } catch {
-      showToast('Failed to delete category', 'error');
+      showToast(isNew ? 'Category created and persisted to Supabase.' : 'Category updated in Supabase.', 'success');
+    } catch (err: any) {
+      showToast(err.message || 'Failed to save category', 'error');
+    } finally {
+      setIsSavingCategory(false);
     }
   };
 
@@ -385,17 +715,19 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const handleDeleteBanner = async (id: string) => {
-    if (!confirm('Delete this hero banner?')) return;
-    try {
-      const res = await adminFetch(`/api/banners/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete banner');
-      await refreshBanners();
-      await loadAdminData();
-      showToast('Banner deleted.', 'info');
-    } catch {
-      showToast('Failed to delete banner', 'error');
-    }
+  const promptDeleteBanner = (b: HeroBanner) => {
+    setDeleteModalError(null);
+    setDeleteConfirmation({
+      type: 'banner',
+      id: b.id,
+      title: b.title,
+      subtitle: `Hero Carousel Banner • ${b.subtitle || 'Home Top'}`,
+    });
+  };
+
+  const handleDeleteBanner = (id: string) => {
+    const banner = banners.find((b) => b.id === id);
+    if (banner) promptDeleteBanner(banner);
   };
 
   // Coupon CRUD
@@ -424,43 +756,51 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const handleDeleteCoupon = async (id: string) => {
-    if (!confirm('Delete this coupon?')) return;
-    try {
-      const res = await adminFetch(`/api/coupons/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete coupon');
-      await loadAdminData();
-      showToast('Coupon deleted.', 'info');
-    } catch {
-      showToast('Failed to delete coupon', 'error');
-    }
+  const promptDeleteCoupon = (c: Coupon) => {
+    setDeleteModalError(null);
+    setDeleteConfirmation({
+      type: 'coupon',
+      id: c.id,
+      title: `Coupon: ${c.code}`,
+      subtitle: `Discount: ${c.discountType === 'percentage' ? `${c.discountValue}%` : `Rs. ${c.discountValue}`}`,
+    });
+  };
+
+  const handleDeleteCoupon = (id: string) => {
+    const c = coupons.find((item) => item.id === id);
+    if (c) promptDeleteCoupon(c);
   };
 
   // Order Deletion
-  const handleDeleteOrder = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this order?')) return;
-    try {
-      const res = await adminFetch(`/api/orders/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete order');
-      await loadAdminData();
-      if (selectedOrder && selectedOrder.id === id) setSelectedOrder(null);
-      showToast('Order deleted.', 'info');
-    } catch {
-      showToast('Failed to delete order', 'error');
-    }
+  const promptDeleteOrder = (ord: Order) => {
+    setDeleteModalError(null);
+    setDeleteConfirmation({
+      type: 'order',
+      id: ord.id,
+      title: `Order #${ord.orderNumber}`,
+      subtitle: `Customer: ${ord.customer.fullName} • City: ${ord.customer.city} • Total: Rs. ${ord.grandTotal.toLocaleString()} • Status: ${ord.status}`,
+    });
+  };
+
+  const handleDeleteOrder = (id: string) => {
+    const order = orders.find((o) => o.id === id);
+    if (order) promptDeleteOrder(order);
   };
 
   // Inquiry Deletion
-  const handleDeleteInquiry = async (id: string) => {
-    if (!confirm('Delete this quotation inquiry?')) return;
-    try {
-      const res = await adminFetch(`/api/inquiries/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete inquiry');
-      await loadAdminData();
-      showToast('Inquiry deleted.', 'info');
-    } catch {
-      showToast('Failed to delete inquiry', 'error');
-    }
+  const promptDeleteInquiry = (inq: B2BInquiry) => {
+    setDeleteModalError(null);
+    setDeleteConfirmation({
+      type: 'inquiry',
+      id: inq.id,
+      title: `Quotation Inquiry from ${inq.companyName || inq.contactPerson}`,
+      subtitle: `Email: ${inq.email} • Phone: ${inq.phone}`,
+    });
+  };
+
+  const handleDeleteInquiry = (id: string) => {
+    const inq = inquiries.find((i) => i.id === id);
+    if (inq) promptDeleteInquiry(inq);
   };
 
   // Super Admin: Update Master Secret
@@ -528,15 +868,27 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const handleDeleteStaff = async (id: string) => {
-    if (!confirm('Are you sure you want to delete these staff credentials?')) return;
-    try {
-      const res = await adminFetch(`/api/admin/security/staff/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete staff');
-      showToast('Staff credentials removed.', 'info');
-      loadAdminData();
-    } catch {
-      showToast('Failed to delete staff member', 'error');
+  const promptDeleteStaff = (st: StaffUser) => {
+    setDeleteModalError(null);
+    setDeleteConfirmation({
+      type: 'staff',
+      id: st.id,
+      title: `Staff Member: ${st.name || st.email}`,
+      subtitle: `Email: ${st.email} • Role: ${st.role.toUpperCase()}`,
+    });
+  };
+
+  const handleDeleteStaff = (id: string) => {
+    const st = securitySettings?.staffList?.find((s: StaffUser) => s.id === id);
+    if (st) {
+      promptDeleteStaff(st);
+    } else {
+      setDeleteModalError(null);
+      setDeleteConfirmation({
+        type: 'staff',
+        id,
+        title: `Staff Member ID: ${id}`,
+      });
     }
   };
 
@@ -712,20 +1064,93 @@ export const AdminDashboard: React.FC = () => {
   }
 
   // Filtered Products for Admin Table
-  const filteredAdminProducts = products.filter(
-    (p) =>
-      p.name.toLowerCase().includes(productSearch.toLowerCase()) ||
-      p.sku.toLowerCase().includes(productSearch.toLowerCase()) ||
-      p.categoryName.toLowerCase().includes(productSearch.toLowerCase())
-  );
+  const filteredAdminProducts = products.filter((p) => {
+    // 1. Search Query
+    if (productSearch.trim()) {
+      const q = productSearch.toLowerCase();
+      const matches =
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        (p.categoryName && p.categoryName.toLowerCase().includes(q)) ||
+        (p.brand && p.brand.toLowerCase().includes(q));
+      if (!matches) return false;
+    }
+
+    // 2. Category Filter
+    if (productCategoryFilter !== 'all') {
+      const matchesCat =
+        p.categoryId === productCategoryFilter ||
+        (p.categoryName && p.categoryName.toLowerCase() === productCategoryFilter.toLowerCase());
+      if (!matchesCat) return false;
+    }
+
+    // 3. Stock Status Filter
+    const threshold = p.lowStockThreshold || lowStockThreshold;
+    if (productStockFilter === 'out_of_stock' && p.stock > 0) return false;
+    if (productStockFilter === 'low_stock' && (p.stock <= 0 || p.stock > threshold)) return false;
+    if (productStockFilter === 'in_stock' && p.stock <= threshold) return false;
+
+    // 4. Active / Inactive Filter
+    if (productActiveFilter === 'active' && p.status === 'inactive') return false;
+    if (productActiveFilter === 'inactive' && p.status !== 'inactive') return false;
+
+    // 5. Featured Filter
+    if (productFeaturedFilter === 'featured' && !p.isFeatured) return false;
+    if (productFeaturedFilter === 'standard' && p.isFeatured) return false;
+
+    return true;
+  });
+
+  // Filtered Categories for Admin Table
+  const filteredAdminCategories = categories.filter((c) => {
+    if (!categorySearch.trim()) return true;
+    const q = categorySearch.toLowerCase();
+    return (
+      c.name.toLowerCase().includes(q) ||
+      c.slug.toLowerCase().includes(q) ||
+      (c.description && c.description.toLowerCase().includes(q))
+    );
+  });
 
   // Filtered Orders for Admin Table
-  const filteredAdminOrders = orders.filter(
-    (o) =>
-      o.orderNumber.toLowerCase().includes(orderSearch.toLowerCase()) ||
-      o.customer.fullName.toLowerCase().includes(orderSearch.toLowerCase()) ||
-      o.customer.phone.includes(orderSearch)
-  );
+  const filteredAdminOrders = orders.filter((o) => {
+    // 1. Search Query
+    if (orderSearch.trim()) {
+      const q = orderSearch.toLowerCase();
+      const matches =
+        o.orderNumber.toLowerCase().includes(q) ||
+        o.customer.fullName.toLowerCase().includes(q) ||
+        o.customer.phone.includes(q) ||
+        (o.customer.whatsappNumber && o.customer.whatsappNumber.includes(q)) ||
+        o.customer.city.toLowerCase().includes(q) ||
+        (o.customer.addressLine && o.customer.addressLine.toLowerCase().includes(q)) ||
+        (o.trackingNumber && o.trackingNumber.toLowerCase().includes(q));
+      if (!matches) return false;
+    }
+
+    // 2. Status Filter
+    if (orderStatusFilter !== 'all') {
+      if (o.status.toLowerCase() !== orderStatusFilter.toLowerCase()) return false;
+    }
+
+    // 3. Date Filter
+    if (orderDateFilter !== 'all' && o.createdAt) {
+      const orderDate = new Date(o.createdAt);
+      const now = new Date();
+      if (orderDateFilter === 'today') {
+        if (orderDate.toDateString() !== now.toDateString()) return false;
+      } else if (orderDateFilter === 'week') {
+        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        if (orderDate < weekAgo) return false;
+      } else if (orderDateFilter === 'month') {
+        if (orderDate.getMonth() !== now.getMonth() || orderDate.getFullYear() !== now.getFullYear()) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  });
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col lg:flex-row">
@@ -919,44 +1344,208 @@ export const AdminDashboard: React.FC = () => {
         {/* TAB 1: OVERVIEW */}
         {activeTab === 'overview' && (
           <div className="space-y-8">
-            <div>
-              <h2 className="text-xl sm:text-2xl font-black text-white">Operations &amp; Sales Summary</h2>
-              <p className="text-xs text-neutral-400 mt-1">Live metrics across Pakistan deliveries.</p>
-            </div>
-
-            {/* Metric KPI Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-2">
-                <div className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Total Sales (PKR)</div>
-                <div className="text-2xl font-black text-amber-400">
-                  Rs. {(analytics?.totalSales || 0).toLocaleString()}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-xl sm:text-2xl font-black text-white">Operations &amp; Sales Summary</h2>
+                <p className="text-xs text-neutral-400 mt-1">Live metrics across Pakistan deliveries and warehouse inventory.</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-xs flex items-center gap-2">
+                  <span className="text-neutral-400">Low-Stock Alert:</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={lowStockThreshold}
+                    onChange={(e) => setLowStockThreshold(Math.max(1, Number(e.target.value)))}
+                    className="w-14 px-2 py-1 rounded-lg bg-neutral-950 border border-neutral-700 text-amber-400 font-bold text-center text-xs"
+                  />
+                  <span className="text-neutral-500">units</span>
                 </div>
-                <div className="text-[11px] text-emerald-400">Cash on Delivery Orders</div>
-              </div>
-
-              <div className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-2">
-                <div className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Total Orders</div>
-                <div className="text-2xl font-black text-white">{analytics?.totalOrders || orders.length}</div>
-                <div className="text-[11px] text-neutral-400">{analytics?.pendingOrders || 0} Pending Verification</div>
-              </div>
-
-              <div className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-2">
-                <div className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Active Catalog Products</div>
-                <div className="text-2xl font-black text-white">{products.length}</div>
-                <div className="text-[11px] text-neutral-400">{categories.length} Categories</div>
-              </div>
-
-              <div className="p-5 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-2">
-                <div className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Low Stock Warnings</div>
-                <div className="text-2xl font-black text-rose-400">{analytics?.lowStockCount || 0}</div>
-                <div className="text-[11px] text-neutral-400">Need restocking</div>
               </div>
             </div>
+
+            {/* 6 Metric KPI Summary Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+              {/* 1. Total Orders */}
+              <div
+                onClick={() => {
+                  setOrderStatusFilter('all');
+                  setActiveTab('orders');
+                }}
+                className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-amber-500/40 transition-colors cursor-pointer space-y-1.5"
+              >
+                <div className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider flex items-center justify-between">
+                  <span>Total Orders</span>
+                  <ShoppingBag className="w-3.5 h-3.5 text-amber-400" />
+                </div>
+                <div className="text-2xl font-black text-white">{orders.length}</div>
+                <div className="text-[10px] text-neutral-400">All registered orders</div>
+              </div>
+
+              {/* 2. Pending Orders */}
+              <div
+                onClick={() => {
+                  setOrderStatusFilter('Pending');
+                  setActiveTab('orders');
+                }}
+                className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-amber-500/40 transition-colors cursor-pointer space-y-1.5"
+              >
+                <div className="text-[11px] font-bold text-amber-400 uppercase tracking-wider flex items-center justify-between">
+                  <span>Pending Orders</span>
+                  <Clock className="w-3.5 h-3.5 text-amber-400" />
+                </div>
+                <div className="text-2xl font-black text-amber-400">
+                  {orders.filter((o) => o.status.toLowerCase().includes('pending')).length}
+                </div>
+                <div className="text-[10px] text-amber-400/80">Awaiting verification</div>
+              </div>
+
+              {/* 3. Total Products */}
+              <div
+                onClick={() => setActiveTab('products')}
+                className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-amber-500/40 transition-colors cursor-pointer space-y-1.5"
+              >
+                <div className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider flex items-center justify-between">
+                  <span>Total Products</span>
+                  <Package className="w-3.5 h-3.5 text-sky-400" />
+                </div>
+                <div className="text-2xl font-black text-white">{products.length}</div>
+                <div className="text-[10px] text-neutral-400">In catalog</div>
+              </div>
+
+              {/* 4. Low Stock Products */}
+              <div
+                onClick={() => {
+                  setProductStockFilter('low_stock');
+                  setActiveTab('products');
+                }}
+                className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-rose-500/40 transition-colors cursor-pointer space-y-1.5"
+              >
+                <div className="text-[11px] font-bold text-rose-400 uppercase tracking-wider flex items-center justify-between">
+                  <span>Low Stock</span>
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                </div>
+                <div className="text-2xl font-black text-rose-400">
+                  {products.filter((p) => p.stock <= (p.lowStockThreshold || lowStockThreshold)).length}
+                </div>
+                <div className="text-[10px] text-rose-400/80">&le; {lowStockThreshold} units left</div>
+              </div>
+
+              {/* 5. Total Categories */}
+              <div
+                onClick={() => setActiveTab('categories')}
+                className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-amber-500/40 transition-colors cursor-pointer space-y-1.5"
+              >
+                <div className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider flex items-center justify-between">
+                  <span>Categories</span>
+                  <FolderTree className="w-3.5 h-3.5 text-indigo-400" />
+                </div>
+                <div className="text-2xl font-black text-white">{categories.length}</div>
+                <div className="text-[10px] text-neutral-400">Active departments</div>
+              </div>
+
+              {/* 6. Delivered Orders */}
+              <div
+                onClick={() => {
+                  setOrderStatusFilter('Delivered');
+                  setActiveTab('orders');
+                }}
+                className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 hover:border-emerald-500/40 transition-colors cursor-pointer space-y-1.5"
+              >
+                <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center justify-between">
+                  <span>Delivered Orders</span>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                </div>
+                <div className="text-2xl font-black text-emerald-400">
+                  {orders.filter((o) => o.status.toLowerCase().includes('delivered')).length}
+                </div>
+                <div className="text-[10px] text-emerald-400/80">Completed COD</div>
+              </div>
+            </div>
+
+            {/* Low-Stock Products Warning Table */}
+            {products.filter((p) => p.stock <= (p.lowStockThreshold || lowStockThreshold)).length > 0 && (
+              <div className="p-5 rounded-2xl bg-neutral-900 border border-rose-500/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+                    <div>
+                      <h3 className="text-sm font-bold text-white">
+                        Low Stock Warning ({products.filter((p) => p.stock <= (p.lowStockThreshold || lowStockThreshold)).length} Items)
+                      </h3>
+                      <p className="text-[11px] text-neutral-400">
+                        Products with stock quantity at or below threshold ({lowStockThreshold} units) require re-ordering.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setProductStockFilter('low_stock');
+                      setActiveTab('products');
+                    }}
+                    className="text-xs text-rose-400 hover:text-rose-300 font-bold"
+                  >
+                    View All in Catalog &rarr;
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-neutral-950 text-neutral-400 font-bold border-b border-neutral-800">
+                      <tr>
+                        <th className="p-2.5">SKU</th>
+                        <th className="p-2.5">Product Name</th>
+                        <th className="p-2.5">Category</th>
+                        <th className="p-2.5 text-center">Remaining Stock</th>
+                        <th className="p-2.5 text-right">Price</th>
+                        <th className="p-2.5 text-center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-neutral-800">
+                      {products
+                        .filter((p) => p.stock <= (p.lowStockThreshold || lowStockThreshold))
+                        .slice(0, 5)
+                        .map((p) => (
+                          <tr key={p.id} className="hover:bg-neutral-800/40">
+                            <td className="p-2.5 font-mono text-neutral-400">{p.sku}</td>
+                            <td className="p-2.5 font-bold text-white max-w-xs truncate">{p.name}</td>
+                            <td className="p-2.5 text-neutral-400">{p.categoryName || p.categoryId}</td>
+                            <td className="p-2.5 text-center">
+                              <span
+                                className={`px-2 py-0.5 rounded font-black text-xs ${
+                                  p.stock <= 0
+                                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                                    : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                }`}
+                              >
+                                {p.stock <= 0 ? 'Out of Stock (0)' : `${p.stock} left`}
+                              </span>
+                            </td>
+                            <td className="p-2.5 text-right font-bold text-white">Rs. {p.price.toLocaleString()}</td>
+                            <td className="p-2.5 text-center">
+                              <button
+                                onClick={() => {
+                                  setEditingProduct(p);
+                                  setIsProductModalOpen(true);
+                                }}
+                                className="px-2.5 py-1 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 font-bold text-[11px] cursor-pointer"
+                              >
+                                Edit Stock
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* Recent Orders Overview */}
             <div className="bg-neutral-900 rounded-2xl p-6 border border-neutral-800 space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Recent Orders (COD)</h3>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Recent Orders (Cash on Delivery)</h3>
                 <button
                   onClick={() => setActiveTab('orders')}
                   className="text-xs text-amber-400 hover:underline font-bold"
@@ -975,6 +1564,7 @@ export const AdminDashboard: React.FC = () => {
                       <th className="p-3 text-right">Amount (PKR)</th>
                       <th className="p-3 text-center">Status</th>
                       <th className="p-3 text-center">COD Status</th>
+                      <th className="p-3 text-center">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-800">
@@ -991,6 +1581,15 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                         <td className="p-3 text-center">
                           <span className="text-[10px] text-neutral-300 font-semibold">{o.paymentStatus}</span>
+                        </td>
+                        <td className="p-3 text-center">
+                          <button
+                            onClick={() => setSelectedOrder(o)}
+                            className="p-1 rounded bg-neutral-800 hover:bg-neutral-700 text-amber-400"
+                            title="View Order"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -1037,16 +1636,133 @@ export const AdminDashboard: React.FC = () => {
               </button>
             </div>
 
-            {/* Search filter */}
-            <div className="relative max-w-md">
-              <input
-                type="text"
-                value={productSearch}
-                onChange={(e) => setProductSearch(e.target.value)}
-                placeholder="Search products by name, SKU, or category..."
-                className="w-full pl-9 pr-4 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white focus:outline-none focus:border-amber-500"
-              />
-              <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
+            {/* Supabase Persistence Banner */}
+            <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 bg-neutral-900 border border-neutral-800 rounded-2xl text-xs">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className={`w-2.5 h-2.5 rounded-full ${
+                    dbStatus?.supabase?.tableExists
+                      ? 'bg-emerald-400 animate-pulse'
+                      : dbStatus?.supabase?.configured
+                      ? 'bg-amber-400'
+                      : 'bg-neutral-500'
+                  }`}
+                />
+                <span className="font-bold text-white">
+                  Database Persistence:{' '}
+                  {dbStatus?.supabase?.tableExists
+                    ? 'Supabase Table "products" Active & Synced'
+                    : dbStatus?.supabase?.configured
+                    ? 'Supabase Ready (Persistent Storage Active)'
+                    : 'Persistent Storage Active'}
+                </span>
+                <span className="text-[11px] px-2 py-0.5 rounded-md bg-neutral-950 text-neutral-300 font-mono border border-neutral-800">
+                  {products.length} products stored
+                </span>
+              </div>
+              <div className="text-[11px] text-neutral-400 flex items-center gap-1.5">
+                <Database className="w-3.5 h-3.5 text-amber-400" />
+                <span>
+                  {dbStatus?.supabase?.tableExists
+                    ? 'All catalog changes sync permanently to remote Supabase database.'
+                    : 'Catalog safe in persistent storage. Run supabase_schema.sql to activate remote Supabase table.'}
+                </span>
+              </div>
+            </div>
+
+            {/* Search and Advanced Filters */}
+            <div className="p-4 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-3">
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    value={productSearch}
+                    onChange={(e) => setProductSearch(e.target.value)}
+                    placeholder="Search products by name, SKU, brand, or category..."
+                    className="w-full pl-9 pr-4 py-2.5 rounded-xl bg-neutral-950 border border-neutral-800 text-xs text-white focus:outline-none focus:border-amber-500"
+                  />
+                  <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Category Filter */}
+                  <select
+                    value={productCategoryFilter}
+                    onChange={(e) => setProductCategoryFilter(e.target.value)}
+                    className="px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-xs text-neutral-200 cursor-pointer focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="all">All Categories</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Stock Filter */}
+                  <select
+                    value={productStockFilter}
+                    onChange={(e) => setProductStockFilter(e.target.value as any)}
+                    className="px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-xs text-neutral-200 cursor-pointer focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="all">All Stock Status</option>
+                    <option value="in_stock">In Stock</option>
+                    <option value="low_stock">Low Stock (&le; {lowStockThreshold})</option>
+                    <option value="out_of_stock">Out of Stock (0)</option>
+                  </select>
+
+                  {/* Active / Inactive Filter */}
+                  <select
+                    value={productActiveFilter}
+                    onChange={(e) => setProductActiveFilter(e.target.value as any)}
+                    className="px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-xs text-neutral-200 cursor-pointer focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="all">All Status</option>
+                    <option value="active">Active Only</option>
+                    <option value="inactive">Inactive Only</option>
+                  </select>
+
+                  {/* Featured Filter */}
+                  <select
+                    value={productFeaturedFilter}
+                    onChange={(e) => setProductFeaturedFilter(e.target.value as any)}
+                    className="px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-xs text-neutral-200 cursor-pointer focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="all">Featured &amp; Standard</option>
+                    <option value="featured">Featured Only</option>
+                    <option value="standard">Standard Only</option>
+                  </select>
+
+                  {(productSearch ||
+                    productCategoryFilter !== 'all' ||
+                    productStockFilter !== 'all' ||
+                    productActiveFilter !== 'all' ||
+                    productFeaturedFilter !== 'all') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProductSearch('');
+                        setProductCategoryFilter('all');
+                        setProductStockFilter('all');
+                        setProductActiveFilter('all');
+                        setProductFeaturedFilter('all');
+                      }}
+                      className="px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold cursor-pointer"
+                    >
+                      Clear Filters
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-neutral-400 pt-1 border-t border-neutral-800/60">
+                <span>
+                  Showing <strong className="text-white">{filteredAdminProducts.length}</strong> of{' '}
+                  <strong className="text-white">{products.length}</strong> products
+                </span>
+                <span className="text-neutral-500">
+                  Tip: Stock alerts are triggered at &le; {lowStockThreshold} units
+                </span>
+              </div>
             </div>
 
             {/* Products Table */}
@@ -1060,6 +1776,7 @@ export const AdminDashboard: React.FC = () => {
                       <th className="p-3">Category</th>
                       <th className="p-3 text-right">Price (PKR)</th>
                       <th className="p-3 text-center">Stock</th>
+                      <th className="p-3 text-center">Status</th>
                       <th className="p-3 text-center">Actions</th>
                     </tr>
                   </thead>
@@ -1071,42 +1788,71 @@ export const AdminDashboard: React.FC = () => {
                             src={p.images[0]}
                             alt=""
                             className="w-10 h-10 object-cover rounded-lg border border-neutral-700 shrink-0"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src =
+                                'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=400&q=80';
+                            }}
                           />
                           <div className="min-w-0">
-                            <div className="font-bold text-white truncate max-w-xs">{p.name}</div>
+                            <div className="font-bold text-white truncate max-w-xs flex items-center gap-1.5">
+                              <span>{p.name}</span>
+                              {p.isFeatured && (
+                                <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-400 text-[9px] font-bold">
+                                  FEATURED
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[11px] text-amber-500">{p.brand}</div>
                           </div>
                         </td>
                         <td className="p-3 font-mono text-neutral-400">{p.sku}</td>
-                        <td className="p-3 text-neutral-300">{p.categoryName}</td>
-                        <td className="p-3 text-right font-bold text-white">
-                          Rs. {(p.salePrice || p.price).toLocaleString()}
+                        <td className="p-3 text-neutral-300">{p.categoryName || p.categoryId}</td>
+                        <td className="p-3 text-right font-black text-amber-400">
+                          Rs. {p.price.toLocaleString()}
+                          {p.salePrice && p.salePrice < p.price && (
+                            <div className="text-[10px] text-emerald-400 font-semibold line-through">
+                              Rs. {p.salePrice.toLocaleString()}
+                            </div>
+                          )}
                         </td>
                         <td className="p-3 text-center">
                           <span
-                            className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                              p.stock <= p.lowStockThreshold
-                                ? 'bg-rose-950 text-rose-300 border border-rose-800'
-                                : 'bg-neutral-800 text-neutral-300'
+                            className={`px-2 py-0.5 rounded font-black text-xs ${
+                              p.stock <= 0
+                                ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                                : p.stock <= (p.lowStockThreshold || lowStockThreshold)
+                                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                             }`}
                           >
-                            {p.stock} in stock
+                            {p.stock <= 0 ? 'Out of Stock (0)' : `${p.stock} units`}
                           </span>
                         </td>
-                        <td className="p-3 text-center space-x-2">
+                        <td className="p-3 text-center">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              p.status !== 'inactive'
+                                ? 'bg-emerald-500/10 text-emerald-400'
+                                : 'bg-neutral-800 text-neutral-400'
+                            }`}
+                          >
+                            {p.status !== 'inactive' ? 'Active' : 'Inactive'}
+                          </span>
+                        </td>
+                        <td className="p-3 text-center space-x-1">
                           <button
                             onClick={() => {
                               setEditingProduct(p);
                               setIsProductModalOpen(true);
                             }}
-                            className="p-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-amber-400 cursor-pointer"
+                            className="p-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-amber-400 cursor-pointer transition-colors"
                             title="Edit Product"
                           >
                             <Edit className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => handleDeleteProduct(p.id)}
-                            className="p-1.5 rounded bg-neutral-800 hover:bg-rose-900 text-rose-400 cursor-pointer"
+                            onClick={() => promptDeleteProduct(p)}
+                            className="p-1.5 rounded bg-neutral-800 hover:bg-rose-900 text-rose-400 cursor-pointer transition-colors"
                             title="Delete Product"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -1114,6 +1860,13 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                       </tr>
                     ))}
+                    {filteredAdminProducts.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="p-8 text-center text-neutral-400 italic">
+                          No products found matching your search or filters.
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -1124,66 +1877,122 @@ export const AdminDashboard: React.FC = () => {
         {/* TAB 3: CATEGORIES MANAGEMENT */}
         {activeTab === 'categories' && (
           <div className="space-y-6">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl sm:text-2xl font-black text-white">Category Architecture</h2>
-                <p className="text-xs text-neutral-400 mt-1">Unlimited nested categories and subcategories.</p>
+                <p className="text-xs text-neutral-400 mt-1">Manage departments, subcategories, ordering, and imagery.</p>
               </div>
 
-              <button
-                onClick={() => {
-                  setEditingCategory({
-                    name: '',
-                    description: '',
-                    iconName: 'Zap',
-                    subcategories: [],
-                    isActive: true,
-                  });
-                  setIsCategoryModalOpen(true);
-                }}
-                className="bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Create Category</span>
-              </button>
+              <div className="flex items-center gap-3">
+                <div className="relative max-w-xs">
+                  <input
+                    type="text"
+                    value={categorySearch}
+                    onChange={(e) => setCategorySearch(e.target.value)}
+                    placeholder="Search categories..."
+                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white focus:outline-none focus:border-amber-500"
+                  />
+                  <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                </div>
+                <button
+                  onClick={() => {
+                    setEditingCategory({
+                      name: '',
+                      description: '',
+                      iconName: 'Zap',
+                      subcategories: [],
+                      displayOrder: categories.length + 1,
+                      isActive: true,
+                    });
+                    setIsCategoryModalOpen(true);
+                  }}
+                  className="bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold text-xs px-4 py-2.5 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Create Category</span>
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {categories.map((cat) => (
+              {filteredAdminCategories.map((cat) => (
                 <div key={cat.id} className="bg-neutral-900 border border-neutral-800 rounded-2xl p-5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-bold text-sm text-white">{cat.name}</h3>
-                    <div className="flex items-center gap-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {cat.image ? (
+                        <img
+                          src={cat.image}
+                          alt={cat.name}
+                          className="w-12 h-12 rounded-xl object-cover border border-neutral-700 shrink-0 bg-neutral-950"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src =
+                              'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=400&q=80';
+                          }}
+                        />
+                      ) : (
+                        <div className="w-12 h-12 rounded-xl bg-neutral-950 border border-neutral-800 flex items-center justify-center shrink-0 text-amber-400">
+                          <FolderTree className="w-6 h-6" />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <h3 className="font-bold text-sm text-white truncate">{cat.name}</h3>
+                        <div className="text-[11px] text-neutral-400 font-mono truncate">/{cat.slug}</div>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span
+                            className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                              cat.isActive !== false ? 'bg-emerald-500/10 text-emerald-400' : 'bg-neutral-800 text-neutral-400'
+                            }`}
+                          >
+                            {cat.isActive !== false ? 'ACTIVE' : 'INACTIVE'}
+                          </span>
+                          <span className="text-[10px] text-neutral-500">Order: {cat.displayOrder || 0}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
                       <button
                         onClick={() => {
                           setEditingCategory(cat);
                           setIsCategoryModalOpen(true);
                         }}
-                        className="p-1 text-amber-400 hover:text-white"
+                        className="p-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-amber-400 cursor-pointer"
+                        title="Edit Category"
                       >
-                        <Edit className="w-4 h-4" />
+                        <Edit className="w-3.5 h-3.5" />
                       </button>
                       <button
-                        onClick={() => handleDeleteCategory(cat.id)}
-                        className="p-1 text-rose-400 hover:text-rose-300"
+                        onClick={() => promptDeleteCategory(cat)}
+                        className="p-1.5 rounded-lg bg-neutral-800 hover:bg-rose-900 text-rose-400 cursor-pointer"
+                        title="Delete Category"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
-                  <p className="text-xs text-neutral-400 line-clamp-2">{cat.description}</p>
+                  <p className="text-xs text-neutral-400 line-clamp-2">{cat.description || 'No description provided.'}</p>
                   <div className="pt-2 border-t border-neutral-800">
-                    <span className="text-[10px] text-neutral-500 uppercase font-semibold">Subcategories:</span>
+                    <span className="text-[10px] text-neutral-500 uppercase font-semibold">
+                      Subcategories ({cat.subcategories?.length || 0}):
+                    </span>
                     <div className="flex flex-wrap gap-1 mt-1">
-                      {cat.subcategories?.map((s) => (
-                        <span key={s.id} className="text-[10px] bg-neutral-800 text-neutral-300 px-2 py-0.5 rounded">
-                          {s.name}
-                        </span>
-                      ))}
+                      {cat.subcategories && cat.subcategories.length > 0 ? (
+                        cat.subcategories.map((s) => (
+                          <span key={s.id} className="text-[10px] bg-neutral-800 text-neutral-300 px-2 py-0.5 rounded">
+                            {s.name}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-[10px] text-neutral-600 italic">None</span>
+                      )}
                     </div>
                   </div>
                 </div>
               ))}
+              {filteredAdminCategories.length === 0 && (
+                <div className="col-span-full p-8 text-center bg-neutral-900 rounded-2xl border border-neutral-800 text-neutral-400 italic">
+                  No categories found matching "{categorySearch}".
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1199,16 +2008,85 @@ export const AdminDashboard: React.FC = () => {
                 </p>
               </div>
 
-              <div className="relative max-w-xs">
-                <input
-                  type="text"
-                  value={orderSearch}
-                  onChange={(e) => setOrderSearch(e.target.value)}
-                  placeholder="Filter by Order ID or phone..."
-                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white focus:outline-none focus:border-amber-500"
-                />
-                <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative max-w-xs">
+                  <input
+                    type="text"
+                    value={orderSearch}
+                    onChange={(e) => setOrderSearch(e.target.value)}
+                    placeholder="Search by Order ID, name, phone, city..."
+                    className="w-full pl-9 pr-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-white focus:outline-none focus:border-amber-500"
+                  />
+                  <Search className="w-4 h-4 text-neutral-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                </div>
+
+                <select
+                  value={orderDateFilter}
+                  onChange={(e) => setOrderDateFilter(e.target.value as any)}
+                  className="px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-neutral-200 cursor-pointer focus:outline-none focus:border-amber-500"
+                >
+                  <option value="all">All Dates</option>
+                  <option value="today">Today</option>
+                  <option value="week">Last 7 Days</option>
+                  <option value="month">This Month</option>
+                </select>
               </div>
+            </div>
+
+            {/* Order Status Filter Tabs */}
+            <div className="flex flex-wrap gap-1.5 p-1.5 rounded-2xl bg-neutral-900 border border-neutral-800 text-xs">
+              {[
+                { label: 'All Orders', value: 'all', count: orders.length },
+                {
+                  label: 'Pending',
+                  value: 'Pending',
+                  count: orders.filter((o) => o.status.toLowerCase().includes('pending')).length,
+                },
+                {
+                  label: 'Confirmed',
+                  value: 'Confirmed',
+                  count: orders.filter((o) => o.status.toLowerCase() === 'confirmed').length,
+                },
+                {
+                  label: 'Processing',
+                  value: 'Processing',
+                  count: orders.filter((o) => o.status.toLowerCase() === 'processing').length,
+                },
+                {
+                  label: 'Shipped',
+                  value: 'Shipped',
+                  count: orders.filter((o) => o.status.toLowerCase() === 'shipped').length,
+                },
+                {
+                  label: 'Delivered',
+                  value: 'Delivered',
+                  count: orders.filter((o) => o.status.toLowerCase() === 'delivered').length,
+                },
+                {
+                  label: 'Cancelled',
+                  value: 'Cancelled',
+                  count: orders.filter((o) => o.status.toLowerCase() === 'cancelled').length,
+                },
+                {
+                  label: 'Returned',
+                  value: 'Returned',
+                  count: orders.filter((o) => o.status.toLowerCase() === 'returned').length,
+                },
+              ].map((st) => (
+                <button
+                  key={st.value}
+                  type="button"
+                  onClick={() => setOrderStatusFilter(st.value)}
+                  className={`px-3 py-1.5 rounded-xl font-bold transition-colors cursor-pointer flex items-center gap-1.5 ${
+                    orderStatusFilter.toLowerCase() === st.value.toLowerCase()
+                      ? 'bg-amber-500 text-neutral-950'
+                      : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+                  }`}
+                >
+                  <span>{st.label}</span>
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/20">{st.count}</span>
+                </button>
+              ))}
             </div>
 
             <div className="bg-neutral-900 rounded-2xl border border-neutral-800 overflow-hidden">
@@ -1254,6 +2132,7 @@ export const AdminDashboard: React.FC = () => {
                             <option value="Out for Delivery">Out for Delivery</option>
                             <option value="Delivered">Delivered</option>
                             <option value="Cancelled">Cancelled</option>
+                            <option value="Returned">Returned</option>
                           </select>
                         </td>
                         <td className="p-3 text-center">
@@ -1278,7 +2157,7 @@ export const AdminDashboard: React.FC = () => {
                             <Eye className="w-4 h-4" />
                           </button>
                           <button
-                            onClick={() => handleDeleteOrder(ord.id)}
+                            onClick={() => promptDeleteOrder(ord)}
                             className="p-1.5 rounded bg-neutral-800 hover:bg-rose-900 text-rose-400 cursor-pointer"
                             title="Delete Order"
                           >
@@ -1287,6 +2166,13 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                       </tr>
                     ))}
+                    {filteredAdminOrders.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="p-8 text-center text-neutral-400 italic">
+                          No orders found matching the filter criteria.
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -1355,7 +2241,7 @@ export const AdminDashboard: React.FC = () => {
                       <Edit className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => handleDeleteBanner(b.id)}
+                      onClick={() => promptDeleteBanner(b)}
                       className="p-2 rounded bg-neutral-800 text-rose-400 hover:bg-rose-900 hover:text-white cursor-pointer"
                       title="Delete Banner"
                     >
@@ -1440,7 +2326,7 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                         <td className="p-3 text-center">
                           <button
-                            onClick={() => handleDeleteCoupon(c.id)}
+                            onClick={() => promptDeleteCoupon(c)}
                             className="p-1.5 rounded bg-neutral-800 hover:bg-rose-900 text-rose-400 cursor-pointer"
                             title="Delete Coupon"
                           >
@@ -1507,7 +2393,7 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                         <td className="p-3 text-center">
                           <button
-                            onClick={() => handleDeleteInquiry(inq.id)}
+                            onClick={() => promptDeleteInquiry(inq)}
                             className="p-1.5 rounded bg-neutral-800 hover:bg-rose-900 text-rose-400 cursor-pointer"
                             title="Delete Inquiry"
                           >
@@ -1672,7 +2558,7 @@ export const AdminDashboard: React.FC = () => {
                             <Edit className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => handleDeleteStaff(st.id)}
+                            onClick={() => promptDeleteStaff(st)}
                             className="p-1.5 rounded bg-neutral-800 hover:bg-rose-900 text-rose-400 cursor-pointer"
                             title="Delete Staff Account"
                           >
@@ -2192,15 +3078,168 @@ export const AdminDashboard: React.FC = () => {
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="font-bold text-neutral-300">Image URL</label>
+              {/* Product Image Upload Section */}
+              <div className="space-y-3 p-4 rounded-2xl bg-neutral-950 border border-neutral-800">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="font-bold text-neutral-200 text-xs flex items-center gap-1.5">
+                      <ImageIcon className="w-4 h-4 text-amber-400" />
+                      <span>Product Image</span>
+                      <span className="text-[10px] text-amber-500 font-semibold">(Supabase Storage)</span>
+                    </label>
+                    <p className="text-[11px] text-neutral-400 mt-0.5">
+                      Upload directly from your device gallery. Saved to Supabase storage bucket <code className="text-amber-400 font-mono text-[10px]">product-images</code>.
+                    </p>
+                  </div>
+                  {isUploadingImage && (
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[11px] font-semibold animate-pulse">
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      <span>Uploading to Supabase...</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Hidden File Input for Device Gallery / File Picker */}
                 <input
-                  type="text"
-                  required
-                  value={editingProduct.images?.[0] || ''}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, images: [e.target.value] })}
-                  className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-white"
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/jpg"
+                  onChange={handleImageFileUpload}
+                  disabled={isUploadingImage}
+                  className="hidden"
+                  id="admin-product-file-picker"
                 />
+
+                {/* Case 1: Image is Selected/Available -> Show Rich Preview Card */}
+                {editingProduct.images?.[0] ? (
+                  <div className="space-y-3">
+                    <div className="relative rounded-2xl overflow-hidden border border-neutral-800 bg-neutral-900">
+                      <div className="flex flex-col sm:flex-row items-center gap-4 p-3.5">
+                        <div className="relative w-28 h-28 sm:w-32 sm:h-32 rounded-xl overflow-hidden bg-neutral-950 shrink-0 border border-neutral-800 flex items-center justify-center">
+                          <img
+                            src={editingProduct.images[0]}
+                            alt="Product Preview"
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src =
+                                'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=400&q=80';
+                            }}
+                          />
+                          {isUploadingImage && (
+                            <div className="absolute inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center">
+                              <RefreshCw className="w-6 h-6 text-amber-400 animate-spin" />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex-1 space-y-2 text-left w-full">
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              editingProduct.images[0].includes('supabase.co')
+                                ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                                : 'bg-neutral-800 text-neutral-300 border border-neutral-700'
+                            }`}>
+                              {editingProduct.images[0].includes('supabase.co')
+                                ? '✓ Saved in Supabase Storage'
+                                : 'External / Web Image'}
+                            </span>
+                          </div>
+
+                          <div className="text-[11px] text-neutral-400 font-mono break-all line-clamp-2">
+                            {editingProduct.images[0]}
+                          </div>
+
+                          {/* Action Buttons: Change Image & Remove Image */}
+                          <div className="flex flex-wrap items-center gap-2 pt-1">
+                            <button
+                              type="button"
+                              disabled={isUploadingImage}
+                              onClick={() => fileInputRef.current?.click()}
+                              className="px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
+                            >
+                              <Upload className="w-3.5 h-3.5" />
+                              <span>Change Image</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isUploadingImage}
+                              onClick={handleRemoveImage}
+                              className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Remove Image</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowUrlInput(!showUrlInput)}
+                              className="text-[11px] text-neutral-400 hover:text-white underline cursor-pointer ml-auto"
+                            >
+                              {showUrlInput ? 'Hide URL' : 'Edit URL directly'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* Case 2: No Image Selected Yet -> Big Prominent Upload Area */
+                  <div
+                    onClick={() => !isUploadingImage && fileInputRef.current?.click()}
+                    className="border-2 border-dashed border-neutral-800 hover:border-amber-500/50 bg-neutral-900/60 hover:bg-neutral-900/90 rounded-2xl p-6 text-center cursor-pointer transition-all space-y-3 group"
+                  >
+                    <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mx-auto group-hover:scale-105 transition-transform">
+                      {isUploadingImage ? (
+                        <RefreshCw className="w-6 h-6 animate-spin" />
+                      ) : (
+                        <Upload className="w-6 h-6" />
+                      )}
+                    </div>
+                    <div>
+                      <div className="font-bold text-white text-xs">
+                        {isUploadingImage ? 'Uploading Image to Supabase Storage...' : 'Choose Image / Upload Image'}
+                      </div>
+                      <p className="text-[11px] text-neutral-400 mt-1">
+                        Click to choose image from device gallery (JPG, JPEG, PNG, WEBP up to 8MB)
+                      </p>
+                    </div>
+                    <div>
+                      <span className="inline-block px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold text-xs shadow-md">
+                        {isUploadingImage ? 'Uploading...' : 'Choose Image from Gallery'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Upload Error Alert */}
+                {imageUploadError && (
+                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span className="flex-1">{imageUploadError}</span>
+                    <button
+                      type="button"
+                      onClick={() => setImageUploadError(null)}
+                      className="text-neutral-400 hover:text-white"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+
+                {/* Optional manual URL fallback */}
+                {(showUrlInput || !editingProduct.images?.[0]) && (
+                  <div className="pt-2 border-t border-neutral-800/80">
+                    <label className="text-[11px] text-neutral-400 block mb-1">
+                      Or paste an external Image URL (fallback):
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="https://... image link"
+                      value={editingProduct.images?.[0] || ''}
+                      onChange={(e) => setEditingProduct({ ...editingProduct, images: [e.target.value] })}
+                      className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-white font-mono text-[11px] focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="space-y-1">
@@ -2228,15 +3267,18 @@ export const AdminDashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsProductModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 cursor-pointer"
+                  disabled={isSavingProduct || isUploadingImage}
+                  className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold cursor-pointer"
+                  disabled={isSavingProduct || isUploadingImage}
+                  className="px-6 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold cursor-pointer flex items-center gap-2 disabled:opacity-50"
                 >
-                  Save Product
+                  {isSavingProduct && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isSavingProduct ? 'Saving to Supabase...' : 'Save Product to Database'}</span>
                 </button>
               </div>
             </form>
@@ -2247,55 +3289,234 @@ export const AdminDashboard: React.FC = () => {
       {/* Category Modal */}
       {isCategoryModalOpen && editingCategory && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl w-full max-w-lg p-6 space-y-4 text-xs">
-            <h3 className="text-base font-bold text-white uppercase tracking-wider">
-              {editingCategory.id ? 'Edit Category' : 'Create Category'}
-            </h3>
-            <form onSubmit={handleSaveCategory} className="space-y-3">
-              <div className="space-y-1">
-                <label className="font-bold text-neutral-300">Category Name</label>
-                <input
-                  type="text"
-                  required
-                  value={editingCategory.name || ''}
-                  onChange={(e) => setEditingCategory({ ...editingCategory, name: e.target.value })}
-                  placeholder="e.g. Solar Equipment"
-                  className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-white"
-                />
+          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl w-full max-w-xl max-h-[90vh] overflow-y-auto p-6 space-y-4 text-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <h3 className="text-base font-bold text-white uppercase tracking-wider">
+                {editingCategory.id ? 'Edit Category' : 'Create New Category'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsCategoryModalOpen(false)}
+                className="text-neutral-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCategory} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="font-bold text-neutral-300">Category Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingCategory.name || ''}
+                    onChange={(e) => setEditingCategory({ ...editingCategory, name: e.target.value })}
+                    placeholder="e.g. Solar Equipment"
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-white"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-neutral-300">Display Order</label>
+                  <input
+                    type="number"
+                    value={editingCategory.displayOrder ?? 0}
+                    onChange={(e) => setEditingCategory({ ...editingCategory, displayOrder: Number(e.target.value) })}
+                    placeholder="0"
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-white"
+                  />
+                </div>
               </div>
+
               <div className="space-y-1">
                 <label className="font-bold text-neutral-300">Description</label>
                 <textarea
-                  rows={3}
+                  rows={2}
                   value={editingCategory.description || ''}
                   onChange={(e) => setEditingCategory({ ...editingCategory, description: e.target.value })}
                   placeholder="Brief description of products in this category..."
                   className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-white"
                 />
               </div>
-              <div className="space-y-1">
-                <label className="font-bold text-neutral-300">Image URL</label>
+
+              {/* Category Image Upload from Device */}
+              <div className="space-y-3 p-4 rounded-2xl bg-neutral-950 border border-neutral-800">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="font-bold text-neutral-200 text-xs flex items-center gap-1.5">
+                      <ImageIcon className="w-4 h-4 text-amber-400" />
+                      <span>Category Image</span>
+                      <span className="text-[10px] text-amber-500 font-semibold">(Supabase Storage)</span>
+                    </label>
+                    <p className="text-[11px] text-neutral-400 mt-0.5">
+                      Upload directly from device gallery or camera. Saved to Supabase storage bucket.
+                    </p>
+                  </div>
+                  {isUploadingCategoryImage && (
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[11px] font-semibold animate-pulse">
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      <span>Uploading...</span>
+                    </div>
+                  )}
+                </div>
+
                 <input
-                  type="text"
-                  value={editingCategory.image || ''}
-                  onChange={(e) => setEditingCategory({ ...editingCategory, image: e.target.value })}
-                  placeholder="https://images.unsplash.com/..."
-                  className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-white"
+                  ref={categoryFileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/jpg"
+                  onChange={handleCategoryImageFileUpload}
+                  disabled={isUploadingCategoryImage}
+                  className="hidden"
+                  id="admin-category-file-picker"
                 />
+
+                {editingCategory.image ? (
+                  <div className="flex items-center gap-4 p-3 rounded-xl bg-neutral-900 border border-neutral-800">
+                    <div className="relative w-20 h-20 rounded-lg overflow-hidden bg-neutral-950 shrink-0 border border-neutral-800 flex items-center justify-center">
+                      <img
+                        src={editingCategory.image}
+                        alt="Category Preview"
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src =
+                            'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=400&q=80';
+                        }}
+                      />
+                      {isUploadingCategoryImage && (
+                        <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
+                          <RefreshCw className="w-4 h-4 text-amber-400 animate-spin" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      <div className="font-bold text-white text-xs truncate max-w-xs">{editingCategory.name || 'Category'}</div>
+                      <div className="text-[10px] text-neutral-400 truncate max-w-xs">{editingCategory.image}</div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => categoryFileInputRef.current?.click()}
+                          disabled={isUploadingCategoryImage}
+                          className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-[11px] font-semibold cursor-pointer"
+                        >
+                          Change Image
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingCategory({ ...editingCategory, image: '' })}
+                          disabled={isUploadingCategoryImage}
+                          className="px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-[11px] font-semibold cursor-pointer"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onClick={() => categoryFileInputRef.current?.click()}
+                    className="border-2 border-dashed border-neutral-800 hover:border-amber-500/50 rounded-xl p-4 text-center cursor-pointer transition-colors bg-neutral-900/50 hover:bg-neutral-900"
+                  >
+                    <Upload className="w-6 h-6 text-amber-400 mx-auto mb-1" />
+                    <span className="font-bold text-neutral-200">Choose Image from Device</span>
+                    <p className="text-[10px] text-neutral-400 mt-0.5">Accepts JPG, PNG, WEBP up to 8MB</p>
+                  </div>
+                )}
+
+                {categoryImageUploadError && (
+                  <p className="text-rose-400 text-[11px]">{categoryImageUploadError}</p>
+                )}
               </div>
+
+              {/* Subcategories */}
+              <div className="space-y-2 p-4 rounded-2xl bg-neutral-950 border border-neutral-800">
+                <label className="font-bold text-neutral-200 text-xs">Subcategories (Optional)</label>
+                <div className="flex flex-wrap gap-1.5 min-h-6">
+                  {(editingCategory.subcategories || []).map((sub) => (
+                    <span
+                      key={sub.id}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-200 text-[11px]"
+                    >
+                      <span>{sub.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveSubcategory(sub.id)}
+                        className="text-neutral-400 hover:text-rose-400 cursor-pointer text-xs"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                  {(!editingCategory.subcategories || editingCategory.subcategories.length === 0) && (
+                    <span className="text-neutral-500 italic text-[11px]">No subcategories added yet.</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="text"
+                    value={newSubcategoryName}
+                    onChange={(e) => setNewSubcategoryName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddSubcategory();
+                      }
+                    }}
+                    placeholder="Enter subcategory name..."
+                    className="flex-1 px-3 py-1.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddSubcategory}
+                    className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-bold cursor-pointer text-xs"
+                  >
+                    + Add
+                  </button>
+                </div>
+              </div>
+
+              {/* Active / Inactive Toggle */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-neutral-950 border border-neutral-800">
+                <div>
+                  <div className="font-bold text-neutral-200 text-xs">Category Status</div>
+                  <div className="text-[11px] text-neutral-400">
+                    {editingCategory.isActive !== false ? 'Active & visible in customer store' : 'Inactive & hidden from customer store'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEditingCategory({
+                      ...editingCategory,
+                      isActive: editingCategory.isActive === false ? true : false,
+                    })
+                  }
+                  className={`px-3 py-1.5 rounded-xl font-bold text-xs cursor-pointer transition-colors ${
+                    editingCategory.isActive !== false
+                      ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                      : 'bg-neutral-800 text-neutral-400 border border-neutral-700'
+                  }`}
+                >
+                  {editingCategory.isActive !== false ? 'Active' : 'Inactive'}
+                </button>
+              </div>
+
               <div className="flex justify-end gap-3 pt-3 border-t border-neutral-800">
                 <button
                   type="button"
+                  disabled={isSavingCategory || isUploadingCategoryImage}
                   onClick={() => setIsCategoryModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold cursor-pointer"
+                  disabled={isSavingCategory || isUploadingCategoryImage}
+                  className="px-6 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold cursor-pointer flex items-center gap-2 disabled:opacity-50"
                 >
-                  Save Category
+                  {isSavingCategory && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isSavingCategory ? 'Saving to Supabase...' : 'Save Category'}</span>
                 </button>
               </div>
             </form>
@@ -2537,50 +3758,295 @@ export const AdminDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* Order Details Modal */}
-      {selectedOrder && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl w-full max-w-xl max-h-[90vh] overflow-y-auto p-6 space-y-4 text-xs">
-            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
-              <h3 className="text-base font-bold text-white uppercase font-mono">
-                Order {selectedOrder.orderNumber}
-              </h3>
-              <button onClick={() => setSelectedOrder(null)} className="text-neutral-400 hover:text-white cursor-pointer">
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmation && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl w-full max-w-md p-6 space-y-5 text-xs shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-500 shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-white">
+                  Confirm Deletion
+                </h3>
+                <p className="text-neutral-400 mt-1">
+                  Are you sure you want to delete this {deleteConfirmation.type}?
+                </p>
+              </div>
+              <button
+                disabled={isDeletingItem}
+                onClick={() => setDeleteConfirmation(null)}
+                className="text-neutral-400 hover:text-white cursor-pointer disabled:opacity-50"
+              >
                 ✕
               </button>
             </div>
 
-            <div className="space-y-2">
-              <div className="text-amber-400 font-bold uppercase text-[11px]">Customer &amp; Address:</div>
-              <div className="text-white font-bold">{selectedOrder.customer.fullName}</div>
-              <div className="text-neutral-400">{selectedOrder.customer.phone}</div>
-              <div className="text-neutral-300">{selectedOrder.customer.addressLine}</div>
-              <div className="text-neutral-400">
-                {selectedOrder.customer.city}, {selectedOrder.customer.province}
+            {/* Target Item Summary */}
+            <div className="p-3.5 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-1">
+              <div className="font-bold text-white text-sm">
+                {deleteConfirmation.title}
               </div>
-            </div>
-
-            <div className="space-y-2 pt-2 border-t border-neutral-800">
-              <div className="text-amber-400 font-bold uppercase text-[11px]">Items Ordered:</div>
-              {selectedOrder.items.map((it, idx) => (
-                <div key={idx} className="flex justify-between py-1 border-b border-neutral-800">
-                  <span>{it.productName} &times; {it.quantity}</span>
-                  <span className="font-bold text-white">Rs. {it.total.toLocaleString()}</span>
+              {deleteConfirmation.subtitle && (
+                <div className="text-[11px] text-neutral-400">
+                  {deleteConfirmation.subtitle}
                 </div>
-              ))}
-              <div className="flex justify-between pt-2 text-sm font-black text-amber-400">
-                <span>Grand Total (COD)</span>
-                <span>Rs. {selectedOrder.grandTotal.toLocaleString()}</span>
+              )}
+            </div>
+
+            {/* Category / Dependency Warning */}
+            {deleteConfirmation.warning && (
+              <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  {deleteConfirmation.warning}
+                </div>
+              </div>
+            )}
+
+            {/* Database Error Banner */}
+            {deleteModalError && (
+              <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  <span className="font-bold">Error:</span> {deleteModalError}
+                </div>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-neutral-800">
+              <button
+                type="button"
+                disabled={isDeletingItem}
+                onClick={() => setDeleteConfirmation(null)}
+                className="px-4 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-semibold cursor-pointer transition-colors disabled:opacity-50"
+              >
+                {deleteConfirmation.blocked ? 'Close' : 'Cancel'}
+              </button>
+
+              {!deleteConfirmation.blocked && (
+                <button
+                  type="button"
+                  disabled={isDeletingItem}
+                  onClick={executeDelete}
+                  className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold cursor-pointer transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  {isDeletingItem ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Deleting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Yes, Delete Item</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Order Details & Invoice Modal */}
+      {selectedOrder && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 space-y-5 text-xs printable-order-modal">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center font-bold">
+                  <ShoppingBag className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white uppercase font-mono tracking-wider">
+                    Invoice #{selectedOrder.orderNumber}
+                  </h3>
+                  <div className="text-[11px] text-neutral-400">
+                    Placed on: {new Date(selectedOrder.createdAt).toLocaleString()}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                  title="Print or Save Invoice as PDF"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Invoice</span>
+                </button>
+                <button
+                  onClick={() => setSelectedOrder(null)}
+                  className="p-1.5 rounded-lg text-neutral-400 hover:text-white cursor-pointer"
+                >
+                  ✕
+                </button>
               </div>
             </div>
 
-            <div className="pt-2 border-t border-neutral-800 flex justify-end">
+            {/* Quick Status Bar */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-2xl bg-neutral-950 border border-neutral-800">
+              <div className="space-y-1">
+                <label className="text-[10px] text-neutral-400 uppercase font-bold tracking-wider">Order Status</label>
+                <select
+                  value={selectedOrder.status}
+                  onChange={(e) => {
+                    const newStatus = e.target.value as OrderStatus;
+                    handleUpdateOrderStatus(selectedOrder.id, newStatus);
+                    setSelectedOrder({ ...selectedOrder, status: newStatus });
+                  }}
+                  className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 text-white font-bold cursor-pointer text-xs focus:outline-none focus:border-amber-500"
+                >
+                  <option value="Pending">Pending</option>
+                  <option value="Confirmed">Confirmed</option>
+                  <option value="Processing">Processing</option>
+                  <option value="Packed">Packed</option>
+                  <option value="Shipped">Shipped</option>
+                  <option value="Out for Delivery">Out for Delivery</option>
+                  <option value="Delivered">Delivered</option>
+                  <option value="Cancelled">Cancelled</option>
+                  <option value="Returned">Returned</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] text-neutral-400 uppercase font-bold tracking-wider">Payment Status (COD)</label>
+                <select
+                  value={selectedOrder.paymentStatus}
+                  onChange={(e) => {
+                    const newPayStatus = e.target.value as PaymentStatus;
+                    handleUpdateOrderStatus(selectedOrder.id, selectedOrder.status, newPayStatus);
+                    setSelectedOrder({ ...selectedOrder, paymentStatus: newPayStatus });
+                  }}
+                  className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 text-white font-bold cursor-pointer text-xs focus:outline-none focus:border-amber-500"
+                >
+                  <option value="COD Pending">COD Pending (Doorstep Cash)</option>
+                  <option value="COD Collected">COD Collected (Paid)</option>
+                  <option value="Cancelled">Cancelled</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Customer Details & Shipping */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-2xl bg-neutral-950 border border-neutral-800">
+              <div className="space-y-1.5">
+                <div className="text-amber-400 font-bold uppercase text-[10px] tracking-wider">Customer Contact</div>
+                <div className="text-white font-bold text-sm">{selectedOrder.customer.fullName}</div>
+                <div className="text-neutral-300 flex items-center gap-2">
+                  <span>Phone: {selectedOrder.customer.phone}</span>
+                </div>
+                {/* WhatsApp Direct Action Button */}
+                <div className="pt-1">
+                  <a
+                    href={`https://wa.me/${(selectedOrder.customer.whatsappNumber || selectedOrder.customer.phone).replace(/[^0-9]/g, '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-bold cursor-pointer"
+                  >
+                    <span>Chat on WhatsApp</span>
+                    <span>&rarr;</span>
+                  </a>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="text-amber-400 font-bold uppercase text-[10px] tracking-wider">Delivery Destination</div>
+                <div className="text-neutral-200">{selectedOrder.customer.addressLine}</div>
+                <div className="text-neutral-400">
+                  {selectedOrder.customer.city}, {selectedOrder.customer.province}
+                </div>
+                <div className="text-[11px] text-amber-500/90 font-medium">
+                  Payment Method: {selectedOrder.paymentMethod || 'Cash on Delivery (COD)'}
+                </div>
+                {selectedOrder.customerNotes && (
+                  <div className="text-[11px] text-neutral-400 italic pt-1">
+                    Note: "{selectedOrder.customerNotes}"
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Items Ordered Table */}
+            <div className="space-y-2">
+              <div className="text-amber-400 font-bold uppercase text-[10px] tracking-wider">Items Ordered</div>
+              <div className="rounded-xl border border-neutral-800 overflow-hidden">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-neutral-950 text-neutral-400 font-bold border-b border-neutral-800">
+                    <tr>
+                      <th className="p-2.5">Product</th>
+                      <th className="p-2.5 text-center">Qty</th>
+                      <th className="p-2.5 text-right">Unit Price</th>
+                      <th className="p-2.5 text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-800">
+                    {selectedOrder.items.map((it, idx) => (
+                      <tr key={idx} className="hover:bg-neutral-800/30">
+                        <td className="p-2.5 font-medium text-white">{it.productName}</td>
+                        <td className="p-2.5 text-center font-bold text-neutral-300">{it.quantity}</td>
+                        <td className="p-2.5 text-right text-neutral-400">Rs. {it.price.toLocaleString()}</td>
+                        <td className="p-2.5 text-right font-bold text-white">Rs. {it.total.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Price Calculation Summary */}
+              <div className="p-3.5 rounded-xl bg-neutral-950 border border-neutral-800 space-y-1.5 text-xs">
+                <div className="flex justify-between text-neutral-400">
+                  <span>Subtotal</span>
+                  <span>Rs. {selectedOrder.subtotal.toLocaleString()}</span>
+                </div>
+                {selectedOrder.discount > 0 && (
+                  <div className="flex justify-between text-emerald-400">
+                    <span>Discount {selectedOrder.couponCode ? `(${selectedOrder.couponCode})` : ''}</span>
+                    <span>- Rs. {selectedOrder.discount.toLocaleString()}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-neutral-400">
+                  <span>Delivery Charges</span>
+                  <span>{selectedOrder.shippingFee === 0 ? 'FREE' : `Rs. ${selectedOrder.shippingFee.toLocaleString()}`}</span>
+                </div>
+                <div className="flex justify-between pt-2 border-t border-neutral-800 text-sm font-black text-amber-400">
+                  <span>Grand Total (Cash on Delivery)</span>
+                  <span>Rs. {selectedOrder.grandTotal.toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="pt-3 border-t border-neutral-800 flex items-center justify-between">
               <button
-                onClick={() => setSelectedOrder(null)}
-                className="px-5 py-2 rounded-xl bg-amber-500 text-neutral-950 font-bold cursor-pointer"
+                type="button"
+                onClick={() => promptDeleteOrder(selectedOrder)}
+                className="px-3.5 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 font-bold text-xs cursor-pointer flex items-center gap-1.5"
               >
-                Close
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Order</span>
               </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs cursor-pointer flex items-center gap-1.5"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Invoice</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedOrder(null)}
+                  className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold text-xs cursor-pointer"
+                >
+                  Done
+                </button>
+              </div>
             </div>
           </div>
         </div>

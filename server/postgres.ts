@@ -126,7 +126,14 @@ class PostgresManager {
       }
     } catch (err: any) {
       this.isConnected = false;
-      this.connectionError = err?.message || String(err);
+      const rawError = err?.message || String(err);
+      if (rawError.includes('password authentication failed')) {
+        this.connectionError = 'Database password requires verification in Supabase Dashboard';
+        console.log('ℹ️ Storage active (data/store.json). Note: Direct PostgreSQL password can be updated in Supabase Dashboard -> Project Settings -> Database.');
+      } else {
+        this.connectionError = rawError;
+        console.log(`ℹ️ Storage active (data/store.json). Note: ${this.connectionError}`);
+      }
       if (this.pool) {
         try {
           await this.pool.end();
@@ -135,7 +142,6 @@ class PostgresManager {
         }
         this.pool = null;
       }
-      console.log(`ℹ️ PostgreSQL notice: ${this.connectionError}. Operating in local JSON storage mode (data/store.json).`);
       return false;
     }
   }
@@ -501,8 +507,8 @@ class PostgresManager {
 
     let hint: string | undefined;
     if (this.connectionError) {
-      if (this.connectionError.includes('password authentication failed')) {
-        hint = 'Database credentials rejected: Check the username and password in your DATABASE_URL.';
+      if (this.connectionError.includes('password') || this.connectionError.includes('credential')) {
+        hint = 'Database credentials need verification: Go to your Supabase Dashboard -> Project Settings -> Database to check or reset your database password, then update DATABASE_URL or set SUPABASE_SERVICE_ROLE_KEY.';
       } else if (this.connectionError.includes('ECONNREFUSED')) {
         hint = 'Database connection refused: Verify that your PostgreSQL server is running, the host and port (default 5432) are correct, and public access/firewall permissions are allowed.';
       } else if (this.connectionError.includes('timeout')) {

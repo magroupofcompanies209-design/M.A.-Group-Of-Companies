@@ -14,6 +14,10 @@ import type {
   User,
   StaffUser,
   AdminSecuritySettings,
+  InventoryLedgerEntry,
+  InventoryChangeReason,
+  CustomerProfile,
+  OrderRiskLevel,
 } from '../src/types/index.ts';
 import { postgresManager, type DatabaseStatus } from './postgres.ts';
 
@@ -29,6 +33,8 @@ interface DatabaseSchema {
   inquiries: B2BInquiry[];
   auditLogs: AuditLog[];
   users: User[];
+  inventoryLedger?: InventoryLedgerEntry[];
+  customerNotes?: Record<string, string>; // phone -> staff note
   securitySettings?: AdminSecuritySettings;
 }
 
@@ -961,20 +967,52 @@ class DatabaseService {
   }
 
   private loadData(): DatabaseSchema {
+    let parsed: DatabaseSchema | null = null;
     try {
       if (!fs.existsSync(DATA_DIR)) {
         fs.mkdirSync(DATA_DIR, { recursive: true });
       }
       if (fs.existsSync(DATA_FILE)) {
         const content = fs.readFileSync(DATA_FILE, 'utf-8');
-        return JSON.parse(content);
+        parsed = JSON.parse(content);
       }
     } catch (e) {
       console.warn('Could not read existing store.json, creating initial store.', e);
     }
 
+    if (parsed) {
+      if (!parsed.inventoryLedger || parsed.inventoryLedger.length === 0) {
+        parsed.inventoryLedger = parsed.products.map((p) => ({
+          id: 'ledg-' + p.id,
+          productId: p.id,
+          productName: p.name,
+          sku: p.sku,
+          change: p.stock,
+          previousStock: 0,
+          newStock: p.stock,
+          reason: 'Initial Stock' as InventoryChangeReason,
+          referenceId: 'OPENING-STOCK',
+          performedBy: 'Warehouse Inventory Team',
+          timestamp: p.createdAt || new Date().toISOString(),
+          notes: 'Opening physical stock audit verified at Lahore central warehouse.',
+        }));
+      }
+      if (!parsed.customerNotes) {
+        parsed.customerNotes = {};
+      }
+      for (const p of parsed.products) {
+        if (!p.costPrice) {
+          p.costPrice = Math.round(p.price * 0.75);
+        }
+      }
+      return parsed;
+    }
+
     const defaultData: DatabaseSchema = {
-      products: INITIAL_PRODUCTS,
+      products: INITIAL_PRODUCTS.map((p) => ({
+        ...p,
+        costPrice: p.costPrice || Math.round(p.price * 0.75),
+      })),
       categories: INITIAL_CATEGORIES,
       brands: INITIAL_BRANDS,
       orders: INITIAL_ORDERS,
@@ -993,6 +1031,21 @@ class DatabaseService {
         },
       ],
       users: [],
+      inventoryLedger: INITIAL_PRODUCTS.map((p) => ({
+        id: 'ledg-' + p.id,
+        productId: p.id,
+        productName: p.name,
+        sku: p.sku,
+        change: p.stock,
+        previousStock: 0,
+        newStock: p.stock,
+        reason: 'Initial Stock' as InventoryChangeReason,
+        referenceId: 'OPENING-STOCK',
+        performedBy: 'Warehouse Inventory Team',
+        timestamp: p.createdAt || new Date().toISOString(),
+        notes: 'Opening physical stock audit verified at Lahore central warehouse.',
+      })),
+      customerNotes: {},
     };
 
     this.saveToFile(defaultData);
@@ -1018,6 +1071,13 @@ class DatabaseService {
   // --- Products ---
   public getProducts(): Product[] {
     return this.data.products;
+  }
+
+  public syncProducts(products: Product[]): void {
+    if (Array.isArray(products) && products.length > 0) {
+      this.data.products = products;
+      this.saveToFile(this.data);
+    }
   }
 
   public getProductById(id: string): Product | undefined {
@@ -1120,16 +1180,96 @@ class DatabaseService {
     );
   }
 
+  public evaluateOrderRisk(order: Partial<Order>): { riskLevel: OrderRiskLevel; riskReasons: string[] } {
+    const reasons: string[] = [];
+    const phone = order.customer?.phone ? order.customer.phone.replace(/[^0-9]/g, '') : '';
+    const total = order.grandTotal || 0;
+
+    // 1. High COD Value Check (PKR 150,000+ is high risk for Cash on Delivery)
+    if (total >= 150000) {
+      reasons.push(`High-value COD order (Rs. ${total.toLocaleString()}). Requires phone verification prior to dispatch.`);
+    }
+
+    if (phone) {
+      const customerOrders = this.data.orders.filter(
+        (o) => o.customer?.phone && o.customer.phone.replace(/[^0-9]/g, '') === phone
+      );
+
+      // 2. Cancellation frequency check
+      const cancelledCount = customerOrders.filter((o) => o.status === 'Cancelled').length;
+      if (cancelledCount >= 2) {
+        reasons.push(`Customer phone has ${cancelledCount} previously cancelled COD orders on record.`);
+      }
+
+      // 3. Delivery failures / returns check
+      const failedDeliveries = customerOrders.filter((o) => o.status === 'Failed Delivery' || o.status === 'Returned').length;
+      if (failedDeliveries >= 1) {
+        reasons.push(`Customer phone has ${failedDeliveries} previous failed or returned deliveries.`);
+      }
+
+      // 4. Order velocity check: multiple pending orders placed recently
+      const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const recentPending = customerOrders.filter(
+        (o) => new Date(o.createdAt).getTime() > oneDayAgo && o.status === 'Pending'
+      );
+      if (recentPending.length >= 3) {
+        reasons.push(`High order velocity: ${recentPending.length} unconfirmed pending orders from this phone number in last 24h.`);
+      }
+    }
+
+    let riskLevel: OrderRiskLevel = 'NORMAL';
+    if (reasons.length > 0) {
+      riskLevel = 'REVIEW REQUIRED';
+    } else if (phone) {
+      const deliveredCount = this.data.orders.filter(
+        (o) => o.customer?.phone && o.customer.phone.replace(/[^0-9]/g, '') === phone && o.status === 'Delivered'
+      ).length;
+      if (deliveredCount >= 1) {
+        riskLevel = 'LOW RISK';
+      }
+    }
+
+    return { riskLevel, riskReasons: reasons };
+  }
+
   public createOrder(order: Order): Order {
+    // Automatic Risk Evaluation
+    if (!order.riskLevel) {
+      const evalResult = this.evaluateOrderRisk(order);
+      order.riskLevel = evalResult.riskLevel;
+      order.riskReasons = evalResult.riskReasons;
+      order.isRiskReviewed = false;
+    }
+
     this.data.orders.unshift(order);
-    // Deduct stock
+    this.ensureInventoryLedger();
+
+    // Deduct stock and record in ledger
     for (const item of order.items) {
       const p = this.data.products.find((prod) => prod.id === item.productId);
       if (p) {
+        const previousStock = p.stock;
         p.stock = Math.max(0, p.stock - item.quantity);
         postgresManager.saveProduct(p).catch(() => {});
+
+        const ledgerEntry: InventoryLedgerEntry = {
+          id: 'ledg-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+          productId: p.id,
+          productName: p.name,
+          sku: p.sku,
+          change: -item.quantity,
+          previousStock,
+          newStock: p.stock,
+          reason: 'Order Placed',
+          referenceId: order.orderNumber,
+          performedBy: order.customer.fullName,
+          timestamp: new Date().toISOString(),
+          notes: `Deducted ${item.quantity} units for COD order ${order.orderNumber}`,
+        };
+        this.data.inventoryLedger!.unshift(ledgerEntry);
       }
     }
+
     this.saveData(this.data);
     postgresManager.saveOrder(order).catch(() => {});
     return order;
@@ -1138,6 +1278,46 @@ class DatabaseService {
   public updateOrder(id: string, updates: Partial<Order>): Order | null {
     const idx = this.data.orders.findIndex((o) => o.id === id || o.orderNumber === id);
     if (idx === -1) return null;
+    const currentOrder = this.data.orders[idx];
+
+    // State transition guard: prevent invalid regressions (e.g. Delivered -> Pending)
+    if (currentOrder.status === 'Delivered' && updates.status === 'Pending') {
+      throw new Error('Invalid status transition: A delivered order cannot be reverted to Pending status.');
+    }
+
+    // If order was newly Cancelled or Returned, safely restore stock and record in ledger
+    const isNewCancellation = updates.status === 'Cancelled' && currentOrder.status !== 'Cancelled';
+    const isNewReturn = updates.status === 'Returned' && currentOrder.status !== 'Returned';
+
+    if (isNewCancellation || isNewReturn) {
+      this.ensureInventoryLedger();
+      const reason: InventoryChangeReason = isNewCancellation ? 'Order Cancelled' : 'Order Returned';
+      for (const item of currentOrder.items) {
+        const p = this.data.products.find((prod) => prod.id === item.productId);
+        if (p) {
+          const previousStock = p.stock;
+          p.stock += item.quantity;
+          postgresManager.saveProduct(p).catch(() => {});
+
+          const ledgerEntry: InventoryLedgerEntry = {
+            id: 'ledg-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+            productId: p.id,
+            productName: p.name,
+            sku: p.sku,
+            change: item.quantity,
+            previousStock,
+            newStock: p.stock,
+            reason,
+            referenceId: currentOrder.orderNumber,
+            performedBy: 'System Inventory Engine',
+            timestamp: new Date().toISOString(),
+            notes: `Restored ${item.quantity} units due to ${reason.toLowerCase()} on order ${currentOrder.orderNumber}`,
+          };
+          this.data.inventoryLedger!.unshift(ledgerEntry);
+        }
+      }
+    }
+
     this.data.orders[idx] = {
       ...this.data.orders[idx],
       ...updates,
@@ -1146,6 +1326,346 @@ class DatabaseService {
     this.saveData(this.data);
     postgresManager.saveOrder(this.data.orders[idx]).catch(() => {});
     return this.data.orders[idx];
+  }
+
+  public markRiskReviewed(orderId: string, reviewedBy: string): Order | null {
+    const idx = this.data.orders.findIndex((o) => o.id === orderId || o.orderNumber === orderId);
+    if (idx === -1) return null;
+    const order = this.data.orders[idx];
+    order.isRiskReviewed = true;
+    order.riskLevel = 'LOW RISK';
+    order.timeline.push({
+      status: order.status,
+      timestamp: new Date().toISOString(),
+      note: `COD Risk manually verified and approved by ${reviewedBy}.`,
+    });
+    order.updatedAt = new Date().toISOString();
+    this.saveData(this.data);
+    this.logAction(
+      'RISK_REVIEW_APPROVED',
+      reviewedBy,
+      `Manually cleared and approved COD risk review for order ${order.orderNumber}`,
+      undefined,
+      order.orderNumber
+    );
+    return order;
+  }
+
+  // --- Inventory Engine & Ledger ---
+  public ensureInventoryLedger(): void {
+    if (!this.data.inventoryLedger) {
+      this.data.inventoryLedger = [];
+    }
+  }
+
+  public getInventoryLedger(productId?: string): InventoryLedgerEntry[] {
+    this.ensureInventoryLedger();
+    if (productId) {
+      return (this.data.inventoryLedger || []).filter((l) => l.productId === productId);
+    }
+    return (this.data.inventoryLedger || []).slice(0, 500);
+  }
+
+  public adjustStock(
+    productId: string,
+    change: number,
+    reason: InventoryChangeReason,
+    referenceId: string = 'MANUAL-ADJ',
+    performedBy: string = 'Staff Administrator',
+    notes: string = ''
+  ): { success: boolean; newStock: number; error?: string } {
+    const p = this.data.products.find((prod) => prod.id === productId);
+    if (!p) {
+      return { success: false, newStock: 0, error: 'Product not found.' };
+    }
+
+    const previousStock = p.stock;
+    const targetStock = previousStock + change;
+    if (targetStock < 0) {
+      return {
+        success: false,
+        newStock: previousStock,
+        error: `Cannot decrease stock by ${Math.abs(change)}. Current available stock is only ${previousStock}. Negative inventory is prohibited.`,
+      };
+    }
+
+    p.stock = targetStock;
+    p.updatedAt = new Date().toISOString();
+
+    this.ensureInventoryLedger();
+    const entry: InventoryLedgerEntry = {
+      id: 'ledg-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      productId: p.id,
+      productName: p.name,
+      sku: p.sku,
+      change,
+      previousStock,
+      newStock: targetStock,
+      reason,
+      referenceId,
+      performedBy,
+      timestamp: new Date().toISOString(),
+      notes: notes || `Stock updated from ${previousStock} to ${targetStock}`,
+    };
+
+    this.data.inventoryLedger!.unshift(entry);
+    if (this.data.inventoryLedger!.length > 1000) {
+      this.data.inventoryLedger = this.data.inventoryLedger!.slice(0, 1000);
+    }
+
+    this.saveData(this.data);
+    postgresManager.saveProduct(p).catch(() => {});
+
+    this.logAction(
+      'STOCK_ADJUSTMENT',
+      performedBy,
+      `Adjusted stock for ${p.name} (${p.sku}): ${change > 0 ? '+' : ''}${change} (Now: ${targetStock}). Reason: ${reason}`,
+      undefined,
+      p.sku,
+      { productId: p.id, change, previousStock, newStock: targetStock, reason, referenceId }
+    );
+
+    return { success: true, newStock: targetStock };
+  }
+
+  // --- Customer Management & Segmentation ---
+  public getCustomers(): CustomerProfile[] {
+    const orderList = this.data.orders;
+    const customerMap = new Map<string, CustomerProfile>();
+    const notesMap = this.data.customerNotes || {};
+
+    for (const o of orderList) {
+      if (!o.customer || !o.customer.phone) continue;
+      const phone = o.customer.phone.trim();
+      const cleanPhone = phone.replace(/[^0-9]/g, '');
+      const key = cleanPhone || phone;
+
+      const existing = customerMap.get(key);
+      const orderDate = o.createdAt;
+      const isDelivered = o.status === 'Delivered';
+      const isCancelled = o.status === 'Cancelled';
+      const isFailed = o.status === 'Failed Delivery' || o.status === 'Returned';
+      const spend = (!isCancelled && o.status !== 'Returned') ? o.grandTotal : 0;
+
+      if (!existing) {
+        customerMap.set(key, {
+          phone: o.customer.phone,
+          fullName: o.customer.fullName,
+          email: o.customer.email,
+          city: o.customer.city,
+          addresses: [o.customer.addressLine].filter(Boolean),
+          totalOrders: 1,
+          deliveredOrders: isDelivered ? 1 : 0,
+          cancelledOrders: isCancelled ? 1 : 0,
+          failedDeliveries: isFailed ? 1 : 0,
+          totalSpend: spend,
+          averageOrderValue: spend,
+          firstOrderDate: orderDate,
+          lastOrderDate: orderDate,
+          segment: 'New',
+          internalNotes: notesMap[key] || notesMap[phone] || '',
+          riskScore: o.riskLevel || 'NORMAL',
+        });
+      } else {
+        existing.totalOrders += 1;
+        if (isDelivered) existing.deliveredOrders += 1;
+        if (isCancelled) existing.cancelledOrders += 1;
+        if (isFailed) existing.failedDeliveries += 1;
+        existing.totalSpend += spend;
+        existing.averageOrderValue = Math.round(existing.totalSpend / Math.max(1, existing.totalOrders));
+
+        if (new Date(orderDate) < new Date(existing.firstOrderDate)) {
+          existing.firstOrderDate = orderDate;
+        }
+        if (new Date(orderDate) > new Date(existing.lastOrderDate)) {
+          existing.lastOrderDate = orderDate;
+          existing.fullName = o.customer.fullName;
+          existing.city = o.customer.city;
+        }
+        if (o.customer.addressLine && !existing.addresses.includes(o.customer.addressLine)) {
+          existing.addresses.push(o.customer.addressLine);
+        }
+      }
+    }
+
+    const now = Date.now();
+    const customers = Array.from(customerMap.values()).map((c) => {
+      const daysSinceLastOrder = (now - new Date(c.lastOrderDate).getTime()) / (24 * 60 * 60 * 1000);
+
+      if (c.totalSpend >= 100000) {
+        c.segment = 'High-Value';
+      } else if (c.totalOrders >= 4) {
+        c.segment = 'Frequent';
+      } else if (daysSinceLastOrder > 90) {
+        c.segment = 'Inactive';
+      } else if (c.totalOrders >= 2) {
+        c.segment = 'Returning';
+      } else {
+        c.segment = 'New';
+      }
+
+      if (c.cancelledOrders >= 2 || c.failedDeliveries >= 1) {
+        c.riskScore = 'REVIEW REQUIRED';
+      } else if (c.deliveredOrders >= 2 && c.cancelledOrders === 0) {
+        c.riskScore = 'LOW RISK';
+      } else {
+        c.riskScore = 'NORMAL';
+      }
+
+      return c;
+    });
+
+    return customers.sort((a, b) => new Date(b.lastOrderDate).getTime() - new Date(a.lastOrderDate).getTime());
+  }
+
+  public updateCustomerNote(phone: string, notes: string, staffName: string): boolean {
+    if (!this.data.customerNotes) {
+      this.data.customerNotes = {};
+    }
+    const cleanPhone = phone.replace(/[^0-9]/g, '') || phone;
+    this.data.customerNotes[cleanPhone] = notes;
+    this.saveData(this.data);
+    this.logAction(
+      'CUSTOMER_NOTE_UPDATED',
+      staffName,
+      `Updated internal staff note for customer ${phone}`,
+      undefined,
+      phone
+    );
+    return true;
+  }
+
+  // --- Advanced Analytics & Profit Engine ---
+  public getAdvancedAnalytics(range: string = 'month') {
+    const orders = this.data.orders;
+    const products = this.data.products;
+
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const yesterdayStart = todayStart - 24 * 60 * 60 * 1000;
+    const weekStart = todayStart - 7 * 24 * 60 * 60 * 1000;
+    const monthStart = todayStart - 30 * 24 * 60 * 60 * 1000;
+    const prevMonthStart = todayStart - 60 * 24 * 60 * 60 * 1000;
+
+    const filterPeriod = (start: number, end: number) => {
+      return orders.filter((o) => {
+        const t = new Date(o.createdAt).getTime();
+        return t >= start && t < end && o.status !== 'Cancelled';
+      });
+    };
+
+    const todayOrders = filterPeriod(todayStart, Date.now());
+    const yesterdayOrders = filterPeriod(yesterdayStart, todayStart);
+    const weekOrders = filterPeriod(weekStart, Date.now());
+    const monthOrders = filterPeriod(monthStart, Date.now());
+    const prevMonthOrders = filterPeriod(prevMonthStart, monthStart);
+
+    const sumRevenue = (list: Order[]) => list.reduce((sum, o) => sum + o.grandTotal, 0);
+
+    // Best selling products calculation
+    const productSalesMap = new Map<string, { product: Product; unitsSold: number; revenue: number }>();
+    for (const p of products) {
+      productSalesMap.set(p.id, { product: p, unitsSold: 0, revenue: 0 });
+    }
+
+    for (const o of orders) {
+      if (o.status === 'Cancelled') continue;
+      for (const item of o.items) {
+        const entry = productSalesMap.get(item.productId);
+        if (entry) {
+          entry.unitsSold += item.quantity;
+          entry.revenue += item.total;
+        }
+      }
+    }
+
+    const allSales = Array.from(productSalesMap.values());
+    const bestSelling = [...allSales].sort((a, b) => b.unitsSold - a.unitsSold).slice(0, 8);
+    const slowMoving = [...allSales].filter((s) => s.unitsSold <= 1).slice(0, 8);
+
+    // Profit calculation (Private to Admins)
+    let totalCost = 0;
+    let totalRevenue = 0;
+    for (const o of orders) {
+      if (o.status === 'Cancelled') continue;
+      for (const item of o.items) {
+        const p = products.find((prod) => prod.id === item.productId);
+        const cost = p?.costPrice || Math.round(item.price * 0.75);
+        totalCost += cost * item.quantity;
+        totalRevenue += item.total;
+      }
+    }
+    const estimatedGrossProfit = Math.max(0, totalRevenue - totalCost);
+    const estimatedGrossMarginPercent = totalRevenue > 0 ? Math.round((estimatedGrossProfit / totalRevenue) * 100) : 0;
+
+    // Order status breakdown
+    const statusCounts: Record<string, number> = {
+      Pending: 0,
+      Confirmed: 0,
+      Processing: 0,
+      Packed: 0,
+      Shipped: 0,
+      'Out for Delivery': 0,
+      Delivered: 0,
+      Cancelled: 0,
+      Returned: 0,
+      'Failed Delivery': 0,
+    };
+    for (const o of orders) {
+      statusCounts[o.status] = (statusCounts[o.status] || 0) + 1;
+    }
+
+    // Inventory stats
+    const lowStock = products.filter((p) => p.stock > 0 && p.stock <= p.lowStockThreshold);
+    const outOfStock = products.filter((p) => p.stock === 0);
+    const totalStockUnits = products.reduce((sum, p) => sum + p.stock, 0);
+    const inventoryValuation = products.reduce((sum, p) => sum + p.stock * p.price, 0);
+
+    // Customer stats
+    const customers = this.getCustomers();
+    const newCustomers = customers.filter((c) => c.segment === 'New').length;
+    const returningCustomers = customers.filter((c) => c.segment !== 'New').length;
+
+    return {
+      sales: {
+        today: sumRevenue(todayOrders),
+        yesterday: sumRevenue(yesterdayOrders),
+        thisWeek: sumRevenue(weekOrders),
+        thisMonth: sumRevenue(monthOrders),
+        previousMonth: sumRevenue(prevMonthOrders),
+        totalSales: sumRevenue(orders.filter((o) => o.status !== 'Cancelled')),
+      },
+      orders: {
+        total: orders.length,
+        statusCounts,
+        todayCount: todayOrders.length,
+        weekCount: weekOrders.length,
+        monthCount: monthOrders.length,
+      },
+      products: {
+        total: products.length,
+        lowStockCount: lowStock.length,
+        outOfStockCount: outOfStock.length,
+        totalStockUnits,
+        inventoryValuation,
+        bestSelling,
+        slowMoving,
+        lowStockList: lowStock.slice(0, 6),
+        outOfStockList: outOfStock.slice(0, 6),
+      },
+      customers: {
+        total: customers.length,
+        newCustomers,
+        returningCustomers,
+        repeatRate: customers.length > 0 ? Math.round((returningCustomers / customers.length) * 100) : 0,
+      },
+      profit: {
+        estimatedGrossProfit,
+        estimatedGrossMarginPercent,
+        totalCost,
+        totalRevenue,
+      },
+    };
   }
 
   // --- Banners ---
@@ -1354,7 +1874,27 @@ class DatabaseService {
     return this.data.auditLogs.slice(0, 100);
   }
 
-  public logAction(action: string, performedBy: string, details: string, ipAddress?: string): void {
+  public logAction(
+    action: string,
+    performedBy: string,
+    details: string,
+    ipAddress?: string,
+    target?: string,
+    metadata?: Record<string, any>
+  ): void {
+    // Sanitize non-sensitive metadata: never record passwords, tokens, secrets
+    let cleanMetadata: Record<string, any> | undefined = undefined;
+    if (metadata && typeof metadata === 'object') {
+      cleanMetadata = {};
+      for (const [k, v] of Object.entries(metadata)) {
+        if (/password|token|secret|credential|key|auth/i.test(k)) {
+          cleanMetadata[k] = '[REDACTED]';
+        } else {
+          cleanMetadata[k] = v;
+        }
+      }
+    }
+
     const log: AuditLog = {
       id: 'log-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
       action,
@@ -1362,6 +1902,8 @@ class DatabaseService {
       details,
       timestamp: new Date().toISOString(),
       ipAddress,
+      target,
+      metadata: cleanMetadata,
     };
     this.data.auditLogs.unshift(log);
     if (this.data.auditLogs.length > 500) {

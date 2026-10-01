@@ -1,10 +1,11 @@
 import crypto from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 import { db } from './db.ts';
+import type { AdminRole } from '../src/types/index.ts';
 
 export interface AdminSession {
   token: string;
-  role: 'superadmin' | 'admin';
+  role: AdminRole;
   username: string;
   createdAt: number;
   expiresAt: number;
@@ -109,7 +110,7 @@ function getAuthSecret(): string {
   );
 }
 
-export function createAdminSession(username: string, role: 'superadmin' | 'admin' = 'superadmin'): AdminSession {
+export function createAdminSession(username: string, role: AdminRole = 'superadmin'): AdminSession {
   const now = Date.now();
   const expiresAt = now + 24 * 60 * 60 * 1000; // 24 hours
   const payloadObj = { username, role, createdAt: now, expiresAt };
@@ -159,9 +160,11 @@ export function getAdminSession(token: string | undefined): AdminSession | null 
       if (bufProvided.length === bufExpected.length && crypto.timingSafeEqual(bufProvided, bufExpected)) {
         const decoded = JSON.parse(Buffer.from(payloadStr, 'base64url').toString('utf-8'));
         if (decoded && decoded.expiresAt && Date.now() <= decoded.expiresAt) {
+          const validRoles: AdminRole[] = ['superadmin', 'admin', 'manager', 'staff'];
+          const role: AdminRole = validRoles.includes(decoded.role) ? decoded.role : 'staff';
           const session: AdminSession = {
             token,
-            role: decoded.role === 'admin' ? 'admin' : 'superadmin',
+            role,
             username: decoded.username || 'Administrator',
             createdAt: decoded.createdAt || Date.now(),
             expiresAt: decoded.expiresAt,
@@ -198,7 +201,7 @@ function extractToken(req: Request): string | undefined {
   return undefined;
 }
 
-// Express Middleware for protecting admin routes
+// Express Middleware for protecting admin routes (any authenticated staff role)
 export function requireAdminAuth(req: Request, res: Response, next: NextFunction) {
   const token = extractToken(req);
   const session = getAdminSession(token);
@@ -214,18 +217,32 @@ export function requireAdminAuth(req: Request, res: Response, next: NextFunction
   next();
 }
 
+// Express Middleware for role-based authorization
+export function requireRole(allowedRoles: AdminRole[]) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const token = extractToken(req);
+    const session = getAdminSession(token);
+
+    if (!session) {
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Administrative privileges required. Please sign in.',
+      });
+    }
+
+    if (!allowedRoles.includes(session.role)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: `Action denied. Required role: [${allowedRoles.join(', ')}]. Your current role is '${session.role}'.`,
+      });
+    }
+
+    (req as any).adminSession = session;
+    next();
+  };
+}
+
 // Express Middleware for Super Admin (Master Administrator) only
 export function requireSuperAdminAuth(req: Request, res: Response, next: NextFunction) {
-  const token = extractToken(req);
-  const session = getAdminSession(token);
-
-  if (!session || session.role !== 'superadmin') {
-    return res.status(403).json({
-      error: 'Forbidden',
-      message: 'Super Administrator privileges required to access or modify master secrets and staff credentials.',
-    });
-  }
-
-  (req as any).adminSession = session;
-  next();
+  return requireRole(['superadmin'])(req, res, next);
 }

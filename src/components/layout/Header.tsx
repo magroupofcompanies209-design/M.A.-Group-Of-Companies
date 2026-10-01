@@ -122,14 +122,6 @@ export const Header: React.FC = () => {
                   <span>WhatsApp: {settings.whatsappNumber}</span>
                 </a>
               )}
-              <button
-                onClick={() => navigate('admin')}
-                className="flex items-center gap-1 text-amber-400 hover:text-amber-300 font-bold transition-colors cursor-pointer border border-amber-500/30 px-2 py-0.5 rounded-md hover:bg-amber-500/10 text-[11px]"
-                title="Access Store Admin Panel"
-              >
-                <Lock className="w-3 h-3" />
-                <span>Admin Portal</span>
-              </button>
             </div>
           </div>
         </div>

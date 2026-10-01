@@ -267,15 +267,6 @@ export const Footer: React.FC = () => {
           <button onClick={() => navigate('terms-conditions')} className="hover:text-neutral-400">
             Terms &amp; Conditions
           </button>
-          <span>&middot;</span>
-          <button
-            onClick={() => navigate('admin')}
-            className="flex items-center gap-1.5 text-neutral-400 hover:text-amber-400 font-bold text-xs transition-colors border border-neutral-800 hover:border-amber-500/40 px-2.5 py-1 rounded-lg cursor-pointer"
-            title="Access Store Management Panel"
-          >
-            <Lock className="w-3.5 h-3.5 text-amber-500" />
-            <span>Admin Portal</span>
-          </button>
         </div>
       </div>
     </footer>

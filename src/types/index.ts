@@ -1,4 +1,4 @@
-export type ProductStatus = 'active' | 'draft' | 'archived';
+export type ProductStatus = 'active' | 'draft' | 'archived' | 'inactive';
 
 export interface ProductSpecification {
   key: string;
@@ -31,11 +31,18 @@ export interface Product {
   specifications: ProductSpecification[];
   features: string[];
   images: string[];
+  image_url?: string;
+  imageUrl?: string;
   videoUrl?: string;
   price: number; // in PKR
   salePrice?: number; // in PKR
+  costPrice?: number; // private product cost in PKR (Admins only)
   stock: number;
+  reservedStock?: number;
+  availableStock?: number;
   lowStockThreshold: number;
+  variants?: ProductVariant[];
+  isArchived?: boolean;
   weight?: string;
   dimensions?: string;
   warranty: string;
@@ -48,7 +55,6 @@ export interface Product {
   dealEndsAt?: string;
   rating: number;
   reviewCount: number;
-  variants?: ProductVariant[];
   frequentlyBoughtWith?: string[]; // array of product IDs
   relatedProductIds?: string[];
   createdAt: string;
@@ -94,7 +100,10 @@ export type OrderStatus =
   | 'Delivered'
   | 'Cancelled'
   | 'Returned'
+  | 'Failed Delivery'
   | 'Refunded';
+
+export type OrderRiskLevel = 'LOW RISK' | 'NORMAL' | 'REVIEW REQUIRED';
 
 export type PaymentStatus =
   | 'COD Pending'
@@ -117,6 +126,7 @@ export interface OrderItem {
 export interface CustomerAddress {
   fullName: string;
   phone: string;
+  whatsappNumber?: string;
   email?: string;
   addressLine: string;
   city: string;
@@ -143,6 +153,9 @@ export interface Order {
   courierName?: string;
   internalNotes?: string;
   customerNotes?: string;
+  riskLevel?: OrderRiskLevel;
+  riskReasons?: string[];
+  isRiskReviewed?: boolean;
   timeline: {
     status: OrderStatus;
     timestamp: string;
@@ -229,6 +242,14 @@ export interface StoreSettings {
   standardShippingFee: number;
   freeShippingThreshold: number;
   taxRate: number; // 0 for retail COD default
+  lowStockThreshold?: number;
+  cityShippingFees?: Record<string, number>;
+  maintenanceMode?: boolean;
+  maintenanceMessage?: string;
+  warrantyPolicyText?: string;
+  returnPolicyText?: string;
+  termsConditionsText?: string;
+  privacyPolicyText?: string;
   aiAssistantEnabled: boolean;
   aiWelcomeMessage: string;
 }
@@ -247,6 +268,8 @@ export interface B2BInquiry {
   createdAt: string;
 }
 
+export type AdminRole = 'superadmin' | 'admin' | 'manager' | 'staff';
+
 export interface AuditLog {
   id: string;
   action: string;
@@ -254,13 +277,15 @@ export interface AuditLog {
   details: string;
   timestamp: string;
   ipAddress?: string;
+  target?: string;
+  metadata?: Record<string, any>;
 }
 
 export interface StaffUser {
   id: string;
   email: string;
   name: string;
-  role: 'superadmin' | 'admin' | 'staff';
+  role: AdminRole;
   password: string;
   createdAt: string;
   updatedAt?: string;
@@ -270,4 +295,49 @@ export interface AdminSecuritySettings {
   masterSecret: string;
   lastUpdated?: string;
   staffList: StaffUser[];
+}
+
+export type InventoryChangeReason =
+  | 'Stock Received'
+  | 'Order Placed'
+  | 'Order Cancelled'
+  | 'Order Returned'
+  | 'Manual Adjustment'
+  | 'Damaged/Discarded'
+  | 'Initial Stock';
+
+export interface InventoryLedgerEntry {
+  id: string;
+  productId: string;
+  productName: string;
+  sku: string;
+  change: number; // e.g. +20, -2, -1
+  previousStock: number;
+  newStock: number;
+  reason: InventoryChangeReason;
+  referenceId?: string; // e.g. "MAG-8921" or PO number
+  performedBy: string;
+  timestamp: string;
+  notes?: string;
+}
+
+export type CustomerSegment = 'New' | 'Returning' | 'Frequent' | 'High-Value' | 'Inactive';
+
+export interface CustomerProfile {
+  phone: string;
+  fullName: string;
+  email?: string;
+  city: string;
+  addresses: string[];
+  totalOrders: number;
+  deliveredOrders: number;
+  cancelledOrders: number;
+  failedDeliveries: number;
+  totalSpend: number;
+  averageOrderValue: number;
+  firstOrderDate: string;
+  lastOrderDate: string;
+  segment: CustomerSegment;
+  internalNotes?: string;
+  riskScore: 'LOW RISK' | 'NORMAL' | 'REVIEW REQUIRED';
 }
