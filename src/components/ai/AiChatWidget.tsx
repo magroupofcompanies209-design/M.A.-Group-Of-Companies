@@ -132,17 +132,17 @@ export const AiChatWidget: React.FC = () => {
     return (
       <button
         onClick={() => setIsAiChatOpen(true)}
-        className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 bg-neutral-900 hover:bg-neutral-800 text-amber-400 border border-amber-500/40 px-4 py-3 rounded-full shadow-2xl transition-all hover:scale-105 cursor-pointer group"
+        className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 bg-[#111318] hover:bg-[#1A1D23] text-blue-400 border border-blue-500/40 px-4 py-3 rounded-full shadow-2xl transition-all hover:scale-105 cursor-pointer group"
       >
         <div className="relative">
-          <Sparkles className="w-5 h-5 text-amber-400 animate-spin-slow" />
-          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-neutral-900"></span>
+          <Sparkles className="w-5 h-5 text-blue-400 animate-spin-slow" />
+          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-[#111318]"></span>
         </div>
         <div className="flex flex-col text-left">
           <span className="text-[11px] font-black tracking-wider uppercase text-white leading-none">
             M.A. Smart Assistant
           </span>
-          <span className="text-[10px] text-amber-400 font-medium leading-tight">
+          <span className="text-[10px] text-blue-400 font-medium leading-tight">
             Solar &middot; Cables &middot; Cash on Delivery
           </span>
         </div>
@@ -151,12 +151,12 @@ export const AiChatWidget: React.FC = () => {
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-full max-w-[390px] sm:max-w-[420px] h-[580px] bg-white rounded-2xl shadow-2xl border border-neutral-300 flex flex-col overflow-hidden animate-in slide-in-from-bottom-4 duration-300">
+    <div className="fixed bottom-4 right-4 z-50 w-full max-w-[390px] sm:max-w-[420px] h-[580px] bg-[#111318] text-white rounded-2xl shadow-2xl border border-[#1A1D23] flex flex-col overflow-hidden animate-in slide-in-from-bottom-4 duration-300">
       {/* Header */}
-      <div className="bg-neutral-950 text-white p-3.5 flex items-center justify-between border-b border-neutral-800 gap-2">
+      <div className="bg-[#0B0D10] text-white p-3.5 flex items-center justify-between border-b border-[#1A1D23] gap-2">
         <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center shrink-0">
-            <Bot className="w-4 h-4 text-amber-400" />
+          <div className="w-8 h-8 rounded-xl bg-blue-500/20 border border-blue-500/40 flex items-center justify-center shrink-0">
+            <Bot className="w-4 h-4 text-blue-400" />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
@@ -165,7 +165,7 @@ export const AiChatWidget: React.FC = () => {
               </span>
               <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
             </div>
-            <div className="text-[10px] text-neutral-400 truncate">
+            <div className="text-[10px] text-[#6B7280] truncate">
               Grounded in Official Catalog
             </div>
           </div>
@@ -174,7 +174,7 @@ export const AiChatWidget: React.FC = () => {
         <div className="flex items-center gap-1.5 shrink-0">
           <button
             onClick={() => setIsAiChatOpen(false)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs shadow-md transition-all cursor-pointer"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
             title="Return back to website"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
@@ -182,7 +182,7 @@ export const AiChatWidget: React.FC = () => {
           </button>
           <button
             onClick={() => setIsAiChatOpen(false)}
-            className="p-1.5 rounded-lg text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors cursor-pointer"
+            className="p-1.5 rounded-lg text-[#6B7280] hover:text-white hover:bg-[#1A1D23] transition-colors cursor-pointer"
             title="Close Assistant"
           >
             <X className="w-4 h-4" />
@@ -191,35 +191,35 @@ export const AiChatWidget: React.FC = () => {
       </div>
 
       {/* Suggested Quick Questions Bar */}
-      <div className="bg-neutral-100 p-2 border-b border-neutral-200 overflow-x-auto flex items-center gap-1.5 text-[11px]">
+      <div className="bg-[#0B0D10]/80 p-2 border-b border-[#1A1D23] overflow-x-auto flex items-center gap-1.5 text-[11px]">
         <button
           onClick={() => handleSendMessage('Calculate solar setup for 1.5-ton AC in Pakistan')}
-          className="whitespace-nowrap px-2.5 py-1 bg-white hover:bg-amber-50 border border-neutral-300 rounded-md text-neutral-700 font-medium transition-colors"
+          className="whitespace-nowrap px-2.5 py-1 bg-[#111318] hover:bg-[#1A1D23] border border-[#2B3038] rounded-md text-neutral-300 font-medium transition-colors"
         >
           Solar for 1.5T AC
         </button>
         <button
           onClick={() => handleSendMessage('What is your Cash on Delivery policy?')}
-          className="whitespace-nowrap px-2.5 py-1 bg-white hover:bg-amber-50 border border-neutral-300 rounded-md text-neutral-700 font-medium transition-colors"
+          className="whitespace-nowrap px-2.5 py-1 bg-[#111318] hover:bg-[#1A1D23] border border-[#2B3038] rounded-md text-neutral-300 font-medium transition-colors"
         >
           COD Policy
         </button>
         <button
           onClick={() => handleSendMessage('Recommend heavy copper wire for home')}
-          className="whitespace-nowrap px-2.5 py-1 bg-white hover:bg-amber-50 border border-neutral-300 rounded-md text-neutral-700 font-medium transition-colors"
+          className="whitespace-nowrap px-2.5 py-1 bg-[#111318] hover:bg-[#1A1D23] border border-[#2B3038] rounded-md text-neutral-300 font-medium transition-colors"
         >
           Pure Copper Cables
         </button>
       </div>
 
       {/* Messages Scroll Area */}
-      <div className="flex-1 p-4 overflow-y-auto space-y-4 bg-neutral-50/50">
+      <div className="flex-1 p-4 overflow-y-auto space-y-4 bg-[#0B0D10]/40">
         {messages.map((m) => (
           <div
             key={m.id}
             className={`flex flex-col ${m.sender === 'user' ? 'items-end' : 'items-start'}`}
           >
-            <div className="flex items-center gap-1 text-[10px] text-neutral-400 mb-1 px-1">
+            <div className="flex items-center gap-1 text-[10px] text-[#6B7280] mb-1 px-1">
               {m.sender === 'user' ? (
                 <>
                   <span>You</span>
@@ -228,8 +228,8 @@ export const AiChatWidget: React.FC = () => {
                 </>
               ) : (
                 <>
-                  <Bot className="w-3 h-3 text-amber-600" />
-                  <span className="font-semibold text-neutral-700">M.A. Advisor</span>
+                  <Bot className="w-3 h-3 text-blue-400" />
+                  <span className="font-semibold text-neutral-300">M.A. Advisor</span>
                   <span>&middot;</span>
                   <span>{m.timestamp}</span>
                 </>
@@ -239,16 +239,16 @@ export const AiChatWidget: React.FC = () => {
             <div
               className={`max-w-[85%] rounded-2xl p-3 text-xs leading-relaxed whitespace-pre-wrap ${
                 m.sender === 'user'
-                  ? 'bg-neutral-900 text-white rounded-tr-none'
-                  : 'bg-white text-neutral-800 border border-neutral-200 shadow-xs rounded-tl-none'
+                  ? 'bg-blue-600 text-white rounded-tr-none'
+                  : 'bg-[#1A1D23] text-neutral-200 border border-[#2B3038] shadow-xs rounded-tl-none'
               }`}
             >
               {m.text}
 
               {/* Matched Product Recommendations */}
               {m.recommendedProducts && m.recommendedProducts.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-neutral-200/80 space-y-2">
-                  <div className="text-[11px] font-bold text-amber-700 uppercase tracking-wider">
+                <div className="mt-3 pt-3 border-t border-[#2B3038] space-y-2">
+                  <div className="text-[11px] font-bold text-blue-400 uppercase tracking-wider">
                     Recommended Catalog Products:
                   </div>
                   {m.recommendedProducts.map((pId) => {
@@ -257,13 +257,13 @@ export const AiChatWidget: React.FC = () => {
                     return (
                       <div
                         key={prod.id}
-                        className="p-2 rounded-lg bg-neutral-50 border border-neutral-200 flex items-center justify-between gap-2"
+                        className="p-2 rounded-lg bg-[#0B0D10] border border-[#2B3038] flex items-center justify-between gap-2"
                       >
                         <div className="min-w-0">
-                          <div className="font-semibold text-neutral-900 truncate">
+                          <div className="font-semibold text-white truncate">
                             {prod.name}
                           </div>
-                          <div className="text-amber-700 font-bold">
+                          <div className="text-blue-400 font-bold">
                             Rs. {(prod.salePrice || prod.price).toLocaleString()}
                           </div>
                         </div>
@@ -273,14 +273,14 @@ export const AiChatWidget: React.FC = () => {
                               setIsAiChatOpen(false);
                               navigate('product', { id: prod.id });
                             }}
-                            className="p-1.5 rounded bg-white hover:bg-neutral-100 text-neutral-700 border border-neutral-300"
+                            className="p-1.5 rounded bg-[#1A1D23] hover:bg-[#2B3038] text-neutral-300 border border-[#2B3038]"
                             title="View Product"
                           >
                             <ExternalLink className="w-3.5 h-3.5" />
                           </button>
                           <button
                             onClick={() => addToCart(prod, 1)}
-                            className="p-1.5 rounded bg-neutral-900 hover:bg-neutral-800 text-amber-400"
+                            className="p-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white"
                             title="Add to Cart (COD)"
                           >
                             <ShoppingCart className="w-3.5 h-3.5" />
@@ -296,8 +296,8 @@ export const AiChatWidget: React.FC = () => {
         ))}
 
         {loading && (
-          <div className="flex items-center gap-2 p-3 bg-white border border-neutral-200 rounded-2xl w-fit text-xs text-neutral-500 shadow-xs">
-            <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
+          <div className="flex items-center gap-2 p-3 bg-[#1A1D23] border border-[#2B3038] rounded-2xl w-fit text-xs text-[#6B7280] shadow-xs">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-400" />
             <span>Consulting engineering catalog &amp; specs...</span>
           </div>
         )}
@@ -311,19 +311,19 @@ export const AiChatWidget: React.FC = () => {
           e.preventDefault();
           handleSendMessage();
         }}
-        className="p-3 bg-white border-t border-neutral-200 flex items-center gap-2"
+        className="p-3 bg-[#0B0D10] border-t border-[#1A1D23] flex items-center gap-2"
       >
         <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Ask about solar, wire ratings, gas hobs, COD..."
-          className="flex-1 bg-neutral-50 border border-neutral-300 rounded-xl px-3.5 py-2 text-xs text-neutral-900 focus:outline-none focus:border-amber-500"
+          className="flex-1 bg-[#111318] border border-[#2B3038] rounded-xl px-3.5 py-2 text-xs text-white placeholder-[#6B7280] focus:outline-none focus:border-blue-500"
         />
         <button
           type="submit"
           disabled={!input.trim() || loading}
-          className="p-2.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-amber-400 disabled:opacity-40 transition-colors cursor-pointer shrink-0"
+          className="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 transition-colors cursor-pointer shrink-0"
         >
           <Send className="w-4 h-4" />
         </button>

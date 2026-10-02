@@ -45,8 +45,8 @@ export const HeroSlider: React.FC = () => {
       <div className="relative z-10 max-w-7xl mx-auto px-4 py-16 sm:py-24 w-full">
         <div className="max-w-2xl space-y-5">
           {banner.badge && (
-            <div className="inline-flex items-center gap-2 text-xs font-bold text-amber-400 uppercase tracking-widest bg-amber-500/10 border border-amber-500/30 px-3.5 py-1.5 rounded-full">
-              <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+            <div className="inline-flex items-center gap-2 text-xs font-bold text-blue-400 uppercase tracking-widest bg-blue-500/10 border border-blue-500/30 px-3.5 py-1.5 rounded-full">
+              <span className="w-2 h-2 rounded-full bg-blue-400"></span>
               {banner.badge}
             </div>
           )}
@@ -73,7 +73,7 @@ export const HeroSlider: React.FC = () => {
                   navigate('shop');
                 }
               }}
-              className="bg-amber-500 hover:bg-amber-600 text-neutral-950 font-extrabold text-xs sm:text-sm px-7 py-3.5 rounded-xl flex items-center gap-2 transition-all shadow-lg shadow-amber-500/20 cursor-pointer"
+              className="bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs sm:text-sm px-7 py-3.5 rounded-xl flex items-center gap-2 transition-all shadow-lg shadow-blue-500/25 cursor-pointer"
             >
               <span>{banner.ctaText || 'SHOP CATALOG'}</span>
               <ArrowRight className="w-4 h-4" />
@@ -124,7 +124,7 @@ export const HeroSlider: React.FC = () => {
                 key={idx}
                 onClick={() => setCurrentIdx(idx)}
                 className={`h-2 rounded-full transition-all cursor-pointer ${
-                  currentIdx === idx ? 'w-8 bg-amber-400' : 'w-2 bg-neutral-600'
+                  currentIdx === idx ? 'w-8 bg-blue-500' : 'w-2 bg-neutral-600'
                 }`}
                 aria-label={`Go to slide ${idx + 1}`}
               />

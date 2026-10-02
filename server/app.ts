@@ -17,7 +17,7 @@ import {
 } from './auth.ts';
 import { askShoppingAssistant, generateAdminCopy } from './gemini.ts';
 import { supabaseService } from './supabase.ts';
-import type { Order, OrderStatus, Product, AdminRole } from '../src/types/index.ts';
+import type { Order, OrderStatus, Product, ProductStatus, AdminRole } from '../src/types/index.ts';
 
 dotenv.config();
 
@@ -516,6 +516,35 @@ app.delete('/api/products/:id', requireRole(['superadmin', 'admin']), async (req
     return res.status(404).json({ success: false, error: 'Product not found.' });
   }
 
+  // Delete Safety: Check if product is referenced in historical orders
+  const referencedOrders = db.getOrders().filter(o => 
+    o.items && o.items.some(item => item.productId === id || (existingProduct && item.productName.toLowerCase() === existingProduct.name.toLowerCase()))
+  );
+
+  const force = req.query.force === 'true';
+  const shouldArchive = req.query.archive === 'true' || req.body?.archive === true;
+
+  if (shouldArchive) {
+    const updates = { status: 'archived' as const, isArchived: true };
+    if (supabaseService.isConfigured()) {
+      await supabaseService.updateProduct(id, updates);
+    }
+    const archived = db.updateProduct(id, updates);
+    db.logAction('ARCHIVE_PRODUCT', (req as any).adminSession.username, `Archived product: ${existingProduct?.name || id}`);
+    return res.json({ success: true, archived: true, message: 'Product archived successfully. Historical orders preserved.' });
+  }
+
+  if (referencedOrders.length > 0 && !force) {
+    return res.status(409).json({
+      success: false,
+      referencedInOrders: true,
+      orderCount: referencedOrders.length,
+      sampleOrderNumbers: referencedOrders.slice(0, 3).map(o => o.orderNumber),
+      error: `This product is linked to ${referencedOrders.length} existing customer order(s) (e.g. ${referencedOrders[0].orderNumber}). Deleting it permanently would break customer invoices and order history. Archiving is recommended to preserve records.`,
+      suggestedAction: 'archive',
+    });
+  }
+
   const existingImages = existingProduct?.images || (existingProduct?.imageUrl ? [existingProduct.imageUrl] : []);
 
   if (supabaseService.isConfigured()) {
@@ -529,7 +558,7 @@ app.delete('/api/products/:id', requireRole(['superadmin', 'admin']), async (req
 
     db.deleteProduct(id);
 
-    // Requirement 6: Remove image from Supabase Storage when appropriate, ensuring no other product uses it
+    // Requirement: Remove image from Supabase Storage when appropriate, ensuring no other product uses it
     for (const img of existingImages) {
       if (img && img.includes('/product-images/')) {
         const isUsedElsewhere = db.getProducts().some(
@@ -552,6 +581,97 @@ app.delete('/api/products/:id', requireRole(['superadmin', 'admin']), async (req
   }
   db.logAction('DELETE_PRODUCT', (req as any).adminSession.username, `Deleted product: ${existingProduct?.name || id} (ID: ${id})`);
   return res.json({ success: true, message: 'Product deleted successfully.' });
+});
+
+// POST /api/products/:id/duplicate (Duplicate product with new SKU and Copy name)
+app.post('/api/products/:id/duplicate', requireRole(['superadmin', 'admin', 'manager']), async (req: Request, res: Response) => {
+  const id = req.params.id;
+  const existing = db.getProductById(id);
+  if (!existing) {
+    return res.status(404).json({ success: false, error: 'Product not found to duplicate.' });
+  }
+
+  const newId = 'prod-' + Date.now();
+  const newSku = `${existing.sku || 'MAG'}-COPY-${Math.floor(100 + Math.random() * 900)}`;
+  const duplicated: Product = {
+    ...existing,
+    id: newId,
+    sku: newSku,
+    name: `${existing.name} (Copy)`,
+    slug: `${existing.slug || 'product'}-copy-${Date.now().toString().slice(-4)}`,
+    status: 'draft',
+    isFeatured: false,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (supabaseService.isConfigured()) {
+    await supabaseService.insertProduct(duplicated);
+  }
+
+  const created = db.createProduct(duplicated);
+  db.logAction('DUPLICATE_PRODUCT', (req as any).adminSession.username, `Duplicated product ${existing.name} into ${created.name} (${created.sku})`);
+  return res.status(201).json(created);
+});
+
+// POST /api/products/:id/archive (Safely archive a product)
+app.post('/api/products/:id/archive', requireRole(['superadmin', 'admin', 'manager']), async (req: Request, res: Response) => {
+  const id = req.params.id;
+  const existing = db.getProductById(id);
+  if (!existing) {
+    return res.status(404).json({ success: false, error: 'Product not found.' });
+  }
+
+  const updates = { status: 'archived' as const, isArchived: true };
+  if (supabaseService.isConfigured()) {
+    await supabaseService.updateProduct(id, updates);
+  }
+  const updated = db.updateProduct(id, updates);
+  db.logAction('ARCHIVE_PRODUCT', (req as any).adminSession.username, `Archived product: ${existing.name} (${existing.sku})`);
+  return res.json({ success: true, message: 'Product archived successfully.', product: updated });
+});
+
+// POST /api/products/:id/restore (Restore an archived product)
+app.post('/api/products/:id/restore', requireRole(['superadmin', 'admin', 'manager']), async (req: Request, res: Response) => {
+  const id = req.params.id;
+  const existing = db.getProductById(id);
+  if (!existing) {
+    return res.status(404).json({ success: false, error: 'Product not found.' });
+  }
+
+  const updates = { status: 'active' as const, isArchived: false };
+  if (supabaseService.isConfigured()) {
+    await supabaseService.updateProduct(id, updates);
+  }
+  const updated = db.updateProduct(id, updates);
+  db.logAction('RESTORE_PRODUCT', (req as any).adminSession.username, `Restored archived product: ${existing.name} (${existing.sku})`);
+  return res.json({ success: true, message: 'Product restored successfully.', product: updated });
+});
+
+// PATCH /api/products/:id/status (Quick status change)
+app.patch('/api/products/:id/status', requireRole(['superadmin', 'admin', 'manager']), async (req: Request, res: Response) => {
+  const id = req.params.id;
+  const { status } = req.body;
+  if (!status || !['active', 'draft', 'archived', 'inactive'].includes(status)) {
+    return res.status(400).json({ success: false, error: 'Invalid product status.' });
+  }
+
+  const existing = db.getProductById(id);
+  if (!existing) {
+    return res.status(404).json({ success: false, error: 'Product not found.' });
+  }
+
+  const updates = {
+    status: status as ProductStatus,
+    isArchived: status === 'archived',
+  };
+
+  if (supabaseService.isConfigured()) {
+    await supabaseService.updateProduct(id, updates);
+  }
+  const updated = db.updateProduct(id, updates);
+  db.logAction('UPDATE_PRODUCT_STATUS', (req as any).adminSession.username, `Changed status of ${existing.name} to ${status}`);
+  return res.json({ success: true, product: updated });
 });
 
 // POST /api/upload (Admin Protected - Supabase Storage)
@@ -732,6 +852,34 @@ app.delete('/api/categories/:id', requireRole(['superadmin', 'admin']), async (r
 
   db.logAction('DELETE_CATEGORY', (req as any).adminSession.username, `Deleted category: ${existingCategory.name} (ID: ${id})`);
   return res.json({ success: true, message: 'Category deleted successfully.' });
+});
+
+app.post('/api/categories/:id/archive', requireRole(['superadmin', 'admin']), async (req: Request, res: Response) => {
+  const id = req.params.id;
+  const cat = db.getCategories().find((c) => c.id === id);
+  if (!cat) return res.status(404).json({ success: false, error: 'Category not found.' });
+
+  const updates = { isActive: false };
+  if (supabaseService.isConfigured()) {
+    await supabaseService.updateCategory(id, updates);
+  }
+  const updated = db.updateCategory(id, updates);
+  db.logAction('ARCHIVE_CATEGORY', (req as any).adminSession.username, `Archived category: ${cat.name}`);
+  return res.json({ success: true, category: updated });
+});
+
+app.post('/api/categories/:id/restore', requireRole(['superadmin', 'admin']), async (req: Request, res: Response) => {
+  const id = req.params.id;
+  const cat = db.getCategories().find((c) => c.id === id);
+  if (!cat) return res.status(404).json({ success: false, error: 'Category not found.' });
+
+  const updates = { isActive: true };
+  if (supabaseService.isConfigured()) {
+    await supabaseService.updateCategory(id, updates);
+  }
+  const updated = db.updateCategory(id, updates);
+  db.logAction('RESTORE_CATEGORY', (req as any).adminSession.username, `Restored category: ${cat.name}`);
+  return res.json({ success: true, category: updated });
 });
 
 // ==========================================
@@ -1299,6 +1447,12 @@ app.get('/api/admin/analytics', requireAdminAuth, (_req: Request, res: Response)
     categoryCounts,
     lowStockProducts: lowStockProducts.slice(0, 5),
   });
+});
+
+app.get('/api/admin/analytics/advanced', requireRole(['superadmin', 'admin', 'manager']), (req: Request, res: Response) => {
+  const range = (req.query.range as string) || 'month';
+  const analytics = db.getAdvancedAnalytics(range);
+  return res.json(analytics);
 });
 
 app.get('/api/admin/audit-logs', requireAdminAuth, (_req: Request, res: Response) => {

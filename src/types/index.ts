@@ -12,6 +12,8 @@ export interface ProductVariant {
   salePrice?: number;
   stock: number;
   sku: string;
+  image?: string;
+  status?: 'active' | 'inactive';
   attributes: Record<string, string>;
 }
 
@@ -41,6 +43,7 @@ export interface Product {
   reservedStock?: number;
   availableStock?: number;
   lowStockThreshold: number;
+  unit?: string; // e.g. "piece", "meter", "set", "box"
   variants?: ProductVariant[];
   isArchived?: boolean;
   weight?: string;

@@ -1,11 +1,40 @@
 @import "tailwindcss";
 
+:root {
+  --brand-deep-black: #0B0D10;
+  --brand-rich-black: #111318;
+  --brand-dark-grey: #1A1D23;
+  --brand-medium-grey: #2B3038;
+  --brand-light-grey: #6B7280;
+  --brand-soft-grey: #E5E7EB;
+  --brand-blue: #2563EB;
+  --brand-bright-blue: #3B82F6;
+  --brand-dark-blue: #1D4ED8;
+  --brand-white: #FFFFFF;
+  --brand-off-white: #F8FAFC;
+}
+
 @layer base {
   html {
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     scroll-behavior: smooth;
+    background-color: #0B0D10;
+    color: #F8FAFC;
   }
 }
+
+/* Premium Black, Grey, Blue Design System Utilities */
+.bg-theme-deep { background-color: #0B0D10; }
+.bg-theme-rich { background-color: #111318; }
+.bg-theme-dark { background-color: #1A1D23; }
+.bg-theme-surface { background-color: #1A1D23; }
+.bg-theme-card { background-color: #111318; }
+.border-theme-subtle { border-color: #1A1D23; }
+.border-theme-border { border-color: #2B3038; }
+.text-theme-blue { color: #3B82F6; }
+.text-theme-blue-action { color: #2563EB; }
+.bg-theme-blue { background-color: #2563EB; }
+.bg-theme-blue:hover { background-color: #1D4ED8; }
 
 @keyframes spinSlow {
   from {
@@ -20,13 +49,208 @@
   animation: spinSlow 8s linear infinite;
 }
 
+/* ==========================================================================
+   PRINT FRIENDLY UTILITIES & THERMAL RECEIPT ENGINE (A4, 80mm, 58mm)
+   High-contrast, pure black/white, zero decorative clutter for thermal & laser printers
+   ========================================================================== */
+
+.print-friendly {
+  color: #000000;
+  background-color: #ffffff;
+  box-sizing: border-box;
+}
+
+.receipt-a4 {
+  width: 100%;
+  max-width: 210mm;
+}
+
+.receipt-80mm {
+  width: 80mm;
+  font-family: 'Courier New', Courier, monospace;
+}
+
+.receipt-58mm {
+  width: 58mm;
+  font-family: 'Courier New', Courier, monospace;
+}
+
+.print-divider-dashed {
+  border-top: 1px dashed #000000;
+  margin: 6px 0;
+  width: 100%;
+}
+
+.print-divider-double {
+  border-top: 3px double #000000;
+  margin: 6px 0;
+  width: 100%;
+}
+
 @media print {
-  body {
-    background: white !important;
-    color: black !important;
+  /* 1. Global Page Setup for Thermal Roll and Standard Sheet Printers */
+  @page {
+    margin: 0;
+    size: auto;
   }
-  .print\:hidden {
+
+  /* 2. Remove all UI navigation, sidebars, buttons, and decorative screen chrome */
+  nav,
+  header,
+  footer,
+  aside,
+  button,
+  input,
+  select,
+  textarea,
+  .no-print,
+  .print\:hidden,
+  .admin-sidebar,
+  .admin-topbar,
+  .toast-container,
+  [data-no-print="true"] {
     display: none !important;
+    visibility: hidden !important;
+  }
+
+  /* 3. Force Pure White Background and Pure Black Text across the entire canvas */
+  html,
+  body {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* 4. Dissolve all modal backdrop overlays, fixed screens, and scrolling viewports */
+  .fixed.inset-0,
+  .fixed.inset-0 > div,
+  .fixed.inset-0 > div > div {
+    position: static !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-height: none !important;
+    max-width: none !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+
+  /* 5. Print Isolation: When a print-friendly document is active, hide everything outside */
+  body:has(.print-friendly) {
+    visibility: hidden !important;
+  }
+
+  body:has(.print-friendly) .print-friendly,
+  body:has(.print-friendly) .print-friendly * {
+    visibility: visible !important;
+  }
+
+  body:has(.print-friendly) .print-friendly {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+  }
+
+  /* 6. High-Contrast Print Friendly Utility Engine */
+  .print-friendly {
+    display: block !important;
+    position: static !important;
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  /* Strip all shadows, glows, and ensure high-contrast pure black ink */
+  .print-friendly * {
+    color: #000000 !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    border-color: #000000 !important;
+    filter: none !important;
+  }
+
+  .print-friendly a {
+    text-decoration: none !important;
+    color: #000000 !important;
+  }
+
+  /* 7. A4 Standard Laser/Inkjet Invoice Template (Standard Office Paper) */
+  .print-friendly.receipt-a4 {
+    width: 100% !important;
+    max-width: 210mm !important;
+    margin: 0 auto !important;
+    padding: 12mm 15mm !important;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+    font-size: 10.5pt !important;
+    line-height: 1.4 !important;
+    page-break-after: auto;
+  }
+
+  /* 8. 80mm Standard POS Thermal Receipt (Epson, Bixolon, Xprinter 80mm Roll) */
+  .print-friendly.receipt-80mm {
+    width: 74mm !important;
+    max-width: 74mm !important;
+    margin: 0 !important;
+    padding: 3mm 4mm !important;
+    font-family: 'Courier New', Courier, monospace !important;
+    font-size: 9pt !important;
+    line-height: 1.25 !important;
+    letter-spacing: -0.2px !important;
+    page-break-after: auto;
+  }
+
+  /* 9. 58mm Compact POS Thermal Receipt (Mini Bluetooth & 58mm Roll Printers) */
+  .print-friendly.receipt-58mm {
+    width: 48mm !important;
+    max-width: 48mm !important;
+    margin: 0 !important;
+    padding: 2mm 2mm !important;
+    font-family: 'Courier New', Courier, monospace !important;
+    font-size: 8pt !important;
+    line-height: 1.18 !important;
+    letter-spacing: -0.3px !important;
+    page-break-after: auto;
+  }
+
+  /* High-contrast dashed and double thermal divider cuts */
+  .print-divider-dashed {
+    border: none !important;
+    border-top: 1px dashed #000000 !important;
+    margin: 4px 0 !important;
+    display: block !important;
+    width: 100% !important;
+    height: 0 !important;
+  }
+
+  .print-divider-double {
+    border: none !important;
+    border-top: 3px double #000000 !important;
+    margin: 5px 0 !important;
+    display: block !important;
+    width: 100% !important;
+    height: 0 !important;
+  }
+
+  /* Ensure rows never split across paper tears */
+  .print-friendly tr,
+  .print-friendly .receipt-row {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
   }
 }
 

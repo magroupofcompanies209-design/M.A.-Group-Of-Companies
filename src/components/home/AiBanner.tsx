@@ -12,16 +12,16 @@ export const AiBanner: React.FC = () => {
   };
 
   return (
-    <section className="py-12 bg-neutral-900 text-white border-b border-neutral-800 relative overflow-hidden">
+    <section className="py-12 bg-[#0B0D10] text-white border-b border-[#1A1D23] relative overflow-hidden">
       {/* Background Decorative Accents */}
-      <div className="absolute top-0 right-0 -mt-10 -mr-10 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl pointer-events-none"></div>
-      <div className="absolute bottom-0 left-0 -mb-10 -ml-10 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
+      <div className="absolute top-0 right-0 -mt-10 -mr-10 w-96 h-96 bg-blue-600/10 rounded-full blur-3xl pointer-events-none"></div>
+      <div className="absolute bottom-0 left-0 -mb-10 -ml-10 w-80 h-80 bg-blue-900/10 rounded-full blur-3xl pointer-events-none"></div>
 
       <div className="max-w-7xl mx-auto px-4 relative z-10">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
           {/* Left Info Column */}
           <div className="lg:col-span-5 space-y-4">
-            <div className="inline-flex items-center gap-2 text-xs font-bold text-amber-400 uppercase tracking-widest bg-amber-500/10 border border-amber-500/30 px-3 py-1 rounded-full">
+            <div className="inline-flex items-center gap-2 text-xs font-bold text-blue-400 uppercase tracking-widest bg-blue-500/10 border border-blue-500/30 px-3 py-1 rounded-full">
               <Sparkles className="w-3.5 h-3.5" />
               <span>Grounded Catalog Intelligence</span>
             </div>
@@ -37,7 +37,7 @@ export const AiBanner: React.FC = () => {
 
             <button
               onClick={() => setIsAiChatOpen(true)}
-              className="bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold text-xs sm:text-sm px-6 py-3 rounded-xl flex items-center gap-2 transition-all shadow-lg shadow-amber-500/20 cursor-pointer"
+              className="bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs sm:text-sm px-6 py-3 rounded-xl flex items-center gap-2 transition-all shadow-lg shadow-blue-600/20 cursor-pointer"
             >
               <Sparkles className="w-4 h-4" />
               <span>Launch Smart Assistant</span>
@@ -48,20 +48,20 @@ export const AiBanner: React.FC = () => {
           <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             <div
               onClick={() => handleOpenWithPrompt('I want to calculate solar system sizing for a 5-Marla house with 1.5-ton AC and 4 fans.')}
-              className="p-4 rounded-xl bg-neutral-800/80 hover:bg-neutral-800 border border-neutral-700/80 hover:border-amber-400 cursor-pointer transition-all group flex flex-col justify-between"
+              className="p-4 rounded-xl bg-[#111318] hover:bg-[#1A1D23] border border-[#2B3038] hover:border-blue-500 cursor-pointer transition-all group flex flex-col justify-between"
             >
               <div className="flex items-center gap-3 mb-2">
-                <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400 group-hover:scale-110 transition-transform">
+                <div className="p-2 rounded-lg bg-blue-500/10 text-blue-400 group-hover:scale-110 transition-transform">
                   <Sun className="w-5 h-5" />
                 </div>
-                <div className="text-xs font-bold text-white group-hover:text-amber-400 transition-colors">
+                <div className="text-xs font-bold text-white group-hover:text-blue-400 transition-colors">
                   Solar Home Sizing
                 </div>
               </div>
               <p className="text-[11px] text-neutral-400 leading-normal mb-3">
                 &quot;Calculate solar sizing for a 5-Marla home running 1.5-ton AC &amp; refrigerator.&quot;
               </p>
-              <div className="flex items-center gap-1 text-[11px] font-semibold text-amber-400">
+              <div className="flex items-center gap-1 text-[11px] font-semibold text-blue-400">
                 <span>Ask AI</span>
                 <ArrowRight className="w-3 h-3 group-hover:translate-x-1 transition-transform" />
               </div>

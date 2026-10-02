@@ -14,6 +14,8 @@ import {
   AuditLog,
   StaffUser,
   AdminSecuritySettings,
+  InventoryLedgerEntry,
+  CustomerProfile,
 } from '../types';
 import {
   LayoutDashboard,
@@ -49,7 +51,14 @@ import {
   Image as ImageIcon,
   Clock,
   Printer,
+  Layers,
+  BarChart3,
+  UserCheck,
 } from 'lucide-react';
+import { PrintReceiptModal } from '../components/common/PrintReceiptModal';
+import { InventoryTab } from './InventoryTab';
+import { CustomersTab } from './CustomersTab';
+import { AnalyticsTab } from './AnalyticsTab';
 
 export const AdminDashboard: React.FC = () => {
   const { products, categories, refreshProducts, refreshCategories, refreshBanners, refreshSettings, showToast } = useStore();
@@ -71,7 +80,10 @@ export const AdminDashboard: React.FC = () => {
     | 'overview'
     | 'products'
     | 'categories'
+    | 'inventory'
     | 'orders'
+    | 'customers'
+    | 'analytics'
     | 'banners'
     | 'coupons'
     | 'inquiries'
@@ -88,6 +100,9 @@ export const AdminDashboard: React.FC = () => {
   const [inquiries, setInquiries] = useState<B2BInquiry[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
+  const [inventoryLedger, setInventoryLedger] = useState<InventoryLedgerEntry[]>([]);
+  const [customersList, setCustomersList] = useState<CustomerProfile[]>([]);
+  const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
   const [adminSettings, setAdminSettings] = useState<StoreSettings | null>(null);
   const [securitySettings, setSecuritySettings] = useState<AdminSecuritySettings | null>(null);
   const [dbStatus, setDbStatus] = useState<any>(null);
@@ -215,7 +230,7 @@ export const AdminDashboard: React.FC = () => {
 
   const loadAdminData = async () => {
     try {
-      const [ordRes, banRes, coupRes, inqRes, logRes, anaRes, setRes] = await Promise.all([
+      const [ordRes, banRes, coupRes, inqRes, logRes, anaRes, setRes, ledgRes, custRes] = await Promise.all([
         adminFetch('/api/orders').then((r) => safeJsonResponse(r, [])),
         adminFetch('/api/banners').then((r) => safeJsonResponse(r, [])),
         adminFetch('/api/coupons').then((r) => safeJsonResponse(r, [])),
@@ -223,6 +238,8 @@ export const AdminDashboard: React.FC = () => {
         adminFetch('/api/admin/audit-logs').then((r) => safeJsonResponse(r, [])),
         adminFetch('/api/admin/analytics').then((r) => safeJsonResponse(r, {})),
         adminFetch('/api/settings').then((r) => safeJsonResponse(r, {})),
+        adminFetch('/api/admin/inventory/ledger').then((r) => safeJsonResponse(r, [])),
+        adminFetch('/api/admin/customers').then((r) => safeJsonResponse(r, [])),
       ]);
 
       if (Array.isArray(ordRes)) setOrders(ordRes);
@@ -232,6 +249,8 @@ export const AdminDashboard: React.FC = () => {
       if (Array.isArray(logRes)) setAuditLogs(logRes);
       if (anaRes && !anaRes.error) setAnalytics(anaRes);
       if (setRes && !setRes.error) setAdminSettings(setRes);
+      if (Array.isArray(ledgRes)) setInventoryLedger(ledgRes);
+      if (Array.isArray(custRes)) setCustomersList(custRes);
 
       // Fetch persistent database status
       adminFetch('/api/database/status')
@@ -1217,6 +1236,18 @@ export const AdminDashboard: React.FC = () => {
             </button>
 
             <button
+              onClick={() => setActiveTab('inventory')}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+                activeTab === 'inventory'
+                  ? 'bg-amber-500 text-neutral-950 font-bold'
+                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+              <span>Inventory &amp; Ledger</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('orders')}
               className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'orders'
@@ -1226,6 +1257,30 @@ export const AdminDashboard: React.FC = () => {
             >
               <ShoppingBag className="w-4 h-4" />
               <span>Orders &amp; COD ({orders.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('customers')}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+                activeTab === 'customers'
+                  ? 'bg-amber-500 text-neutral-950 font-bold'
+                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+              }`}
+            >
+              <UserCheck className="w-4 h-4" />
+              <span>Customers &amp; CRM ({customersList.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+                activeTab === 'analytics'
+                  ? 'bg-amber-500 text-neutral-950 font-bold'
+                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+              }`}
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span>Analytics &amp; Profit</span>
             </button>
 
             <button
@@ -1997,6 +2052,25 @@ export const AdminDashboard: React.FC = () => {
           </div>
         )}
 
+        {/* INVENTORY ENGINE & LEDGER */}
+        {activeTab === 'inventory' && (
+          <InventoryTab
+            products={products}
+            inventoryLedger={inventoryLedger}
+            adminToken={adminToken}
+            adminRole={adminRole}
+            onRefresh={() => {
+              refreshProducts();
+              adminFetch('/api/admin/inventory/ledger')
+                .then((r) => safeJsonResponse(r, []))
+                .then((ledg) => {
+                  if (Array.isArray(ledg)) setInventoryLedger(ledg);
+                });
+            }}
+            showToast={showToast}
+          />
+        )}
+
         {/* TAB 4: ORDERS & COD MANAGEMENT */}
         {activeTab === 'orders' && (
           <div className="space-y-6">
@@ -2157,6 +2231,13 @@ export const AdminDashboard: React.FC = () => {
                             <Eye className="w-4 h-4" />
                           </button>
                           <button
+                            onClick={() => setPrintingOrder(ord)}
+                            className="p-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-emerald-400 cursor-pointer"
+                            title="Print Receipt (A4, 80mm POS, 58mm POS)"
+                          >
+                            <Printer className="w-4 h-4" />
+                          </button>
+                          <button
                             onClick={() => promptDeleteOrder(ord)}
                             className="p-1.5 rounded bg-neutral-800 hover:bg-rose-900 text-rose-400 cursor-pointer"
                             title="Delete Order"
@@ -2178,6 +2259,31 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </div>
           </div>
+        )}
+
+        {/* CUSTOMERS MANAGEMENT & SEGMENTATION */}
+        {activeTab === 'customers' && (
+          <CustomersTab
+            customers={customersList}
+            adminToken={adminToken}
+            adminRole={adminRole}
+            onRefresh={() => {
+              adminFetch('/api/admin/customers')
+                .then((r) => safeJsonResponse(r, []))
+                .then((cust) => {
+                  if (Array.isArray(cust)) setCustomersList(cust);
+                });
+            }}
+            showToast={showToast}
+          />
+        )}
+
+        {/* ADVANCED ANALYTICS & PROFIT ENGINE */}
+        {activeTab === 'analytics' && (
+          <AnalyticsTab
+            adminToken={adminToken}
+            adminRole={adminRole}
+          />
         )}
 
         {/* TAB 5: HERO BANNERS MANAGEMENT */}
@@ -3873,12 +3979,12 @@ export const AdminDashboard: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => window.print()}
+                  onClick={() => setPrintingOrder(selectedOrder)}
                   className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
-                  title="Print or Save Invoice as PDF"
+                  title="Print Receipt (A4, 80mm POS, 58mm POS)"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>Print Invoice</span>
+                  <span>Print Receipt</span>
                 </button>
                 <button
                   onClick={() => setSelectedOrder(null)}
@@ -4033,11 +4139,12 @@ export const AdminDashboard: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => window.print()}
+                  onClick={() => setPrintingOrder(selectedOrder)}
                   className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs cursor-pointer flex items-center gap-1.5"
+                  title="Print Thermal / A4 Receipt"
                 >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Print Invoice</span>
+                  <Printer className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Print Receipt</span>
                 </button>
                 <button
                   type="button"
@@ -4050,6 +4157,14 @@ export const AdminDashboard: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Authoritative Print Receipt Modal Engine */}
+      {printingOrder && (
+        <PrintReceiptModal
+          order={printingOrder}
+          onClose={() => setPrintingOrder(null)}
+        />
       )}
     </div>
   );

@@ -25,31 +25,31 @@ export const FeaturedSection: React.FC = () => {
   }
 
   return (
-    <section className="py-14 bg-neutral-50 border-b border-neutral-200">
+    <section className="py-14 bg-[#0B0D10] border-b border-[#1A1D23]">
       <div className="max-w-7xl mx-auto px-4">
         {/* Top Header & Interactive Segmented Filter Controls */}
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
           <div>
-            <div className="text-xs font-bold text-amber-600 uppercase tracking-widest mb-1 flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+            <div className="text-xs font-bold text-[#3B82F6] uppercase tracking-widest mb-1 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-[#2563EB]"></span>
               Selected Wholesale &amp; Retail Offers
             </div>
-            <h2 className="text-2xl sm:text-3xl font-extrabold text-neutral-900 tracking-tight">
+            <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
               Trending Equipment &amp; Deals
             </h2>
           </div>
 
-          {/* Segmented Control Buttons (Anti-slop compliant) */}
-          <div className="flex items-center gap-1 p-1 bg-white border border-neutral-200 rounded-xl shadow-xs overflow-x-auto max-w-full">
+          {/* Segmented Control Buttons */}
+          <div className="flex items-center gap-1 p-1 bg-[#111318] border border-[#2B3038] rounded-xl shadow-xs overflow-x-auto max-w-full">
             <button
               onClick={() => setActiveTab('deals')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
                 activeTab === 'deals'
-                  ? 'bg-neutral-900 text-amber-400 shadow-sm'
-                  : 'text-neutral-600 hover:text-neutral-900'
+                  ? 'bg-[#2563EB] text-white shadow-sm'
+                  : 'text-[#6B7280] hover:text-white'
               }`}
             >
-              <Flame className="w-3.5 h-3.5 text-rose-500" />
+              <Flame className="w-3.5 h-3.5 text-rose-400" />
               <span>Today&apos;s Deals</span>
             </button>
 
@@ -57,11 +57,11 @@ export const FeaturedSection: React.FC = () => {
               onClick={() => setActiveTab('bestsellers')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
                 activeTab === 'bestsellers'
-                  ? 'bg-neutral-900 text-amber-400 shadow-sm'
-                  : 'text-neutral-600 hover:text-neutral-900'
+                  ? 'bg-[#2563EB] text-white shadow-sm'
+                  : 'text-[#6B7280] hover:text-white'
               }`}
             >
-              <TrendingUp className="w-3.5 h-3.5 text-blue-500" />
+              <TrendingUp className="w-3.5 h-3.5 text-blue-400" />
               <span>Best Sellers</span>
             </button>
 
@@ -69,11 +69,11 @@ export const FeaturedSection: React.FC = () => {
               onClick={() => setActiveTab('solar')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
                 activeTab === 'solar'
-                  ? 'bg-neutral-900 text-amber-400 shadow-sm'
-                  : 'text-neutral-600 hover:text-neutral-900'
+                  ? 'bg-[#2563EB] text-white shadow-sm'
+                  : 'text-[#6B7280] hover:text-white'
               }`}
             >
-              <Sun className="w-3.5 h-3.5 text-amber-500" />
+              <Sun className="w-3.5 h-3.5 text-blue-300" />
               <span>Solar Systems</span>
             </button>
 
@@ -81,11 +81,11 @@ export const FeaturedSection: React.FC = () => {
               onClick={() => setActiveTab('new')}
               className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
                 activeTab === 'new'
-                  ? 'bg-neutral-900 text-amber-400 shadow-sm'
-                  : 'text-neutral-600 hover:text-neutral-900'
+                  ? 'bg-[#2563EB] text-white shadow-sm'
+                  : 'text-[#6B7280] hover:text-white'
               }`}
             >
-              <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
+              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
               <span>New Arrivals</span>
             </button>
           </div>
@@ -102,10 +102,10 @@ export const FeaturedSection: React.FC = () => {
         <div className="mt-10 text-center">
           <button
             onClick={() => navigate('shop')}
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white border border-neutral-300 hover:border-neutral-900 text-neutral-900 text-xs font-bold shadow-xs hover:shadow-sm transition-all cursor-pointer"
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-[#111318] border border-[#2B3038] hover:border-[#2563EB] text-white text-xs font-bold shadow-xs hover:shadow-md transition-all cursor-pointer"
           >
             <span>Explore Complete Store Catalog (PKR)</span>
-            <ArrowRight className="w-4 h-4" />
+            <ArrowRight className="w-4 h-4 text-[#3B82F6]" />
           </button>
         </div>
       </div>
