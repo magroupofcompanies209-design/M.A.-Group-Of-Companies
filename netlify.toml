@@ -5,21 +5,26 @@
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
-  external_node_modules = ["pg"]
-  included_files = ["data/**"]
 
+# Redirect all /api/* requests to our Express serverless function
 [[redirects]]
-  from = "/api"
+  from = "/api/*"
   to = "/.netlify/functions/api"
   status = 200
   force = true
 
+# Explicit SPA fallback for /admin and /admin/* so direct visits and refreshes never 404
 [[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/api/:splat"
+  from = "/admin"
+  to = "/index.html"
   status = 200
-  force = true
 
+[[redirects]]
+  from = "/admin/*"
+  to = "/index.html"
+  status = 200
+
+# SPA fallback for React frontend routes
 [[redirects]]
   from = "/*"
   to = "/index.html"

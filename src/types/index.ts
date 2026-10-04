@@ -223,6 +223,8 @@ export interface Coupon {
 export interface StoreSettings {
   storeName: string;
   tagline: string;
+  receiptLogoUrl?: string;
+  receiptFooterNote?: string;
   announcementBarText?: string;
   showAnnouncementBar?: boolean;
   contactEmail: string;

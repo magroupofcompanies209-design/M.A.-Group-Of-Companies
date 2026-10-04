@@ -1,859 +1,981 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
-import type { Product, Category, Order } from '../src/types/index.ts';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import type { Product, Category, Order, StoreSettings, AdminSecuritySettings } from '../src/types/index.ts';
 
-dotenv.config();
+let supabaseInstance: SupabaseClient | null = null;
+let supabaseAdminInstance: SupabaseClient | null = null;
 
-export interface SupabaseConfigStatus {
-  configured: boolean;
-  connected: boolean;
-  url?: string;
-  maskedKey?: string;
-  hasServiceRoleKey: boolean;
-  tableExists: boolean;
-  productCount?: number;
-  storageReady?: boolean;
-  error?: string | null;
-  notice?: string;
+function cleanEnvValue(val?: string): string {
+  if (!val) return '';
+  let trimmed = val.trim();
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
 }
 
-class SupabaseService {
-  private client: SupabaseClient | null = null;
-  private url: string | null = null;
-  private key: string | null = null;
-  private isServiceRole = false;
-  private tableExists: boolean | null = null;
-  private lastTableCheckTime = 0;
+export function getSupabaseUrl(): string {
+  const raw = cleanEnvValue(
+    process.env.SUPABASE_URL ||
+    process.env.VITE_SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.SUPABASE_PROJECT_URL ||
+    ''
+  );
+  if (!raw) return '';
+  if (raw.startsWith('http://') || raw.startsWith('https://')) {
+    return raw.replace(/\/+$/, '');
+  }
+  if (/^[a-z0-9]{15,30}$/i.test(raw)) {
+    return `https://${raw}.supabase.co`;
+  }
+  return `https://${raw.replace(/\/+$/, '')}`;
+}
 
-  constructor() {
-    this.init();
+export function getSupabaseAnonKey(): string {
+  return cleanEnvValue(
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_KEY ||
+    process.env.SUPABASE_PUBLIC_KEY ||
+    ''
+  );
+}
+
+export function getSupabaseServiceRoleKey(): string {
+  return cleanEnvValue(
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.VITE_SUPABASE_SERVICE_ROLE_KEY ||
+    ''
+  );
+}
+
+export function isSupabaseConfigured(): boolean {
+  const url = getSupabaseUrl();
+  const key = getSupabaseServiceRoleKey() || getSupabaseAnonKey();
+  return Boolean(url && key && url.startsWith('https://'));
+}
+
+export function getSupabase(): SupabaseClient | null {
+  if (!isSupabaseConfigured()) return null;
+  if (!supabaseInstance) {
+    const url = getSupabaseUrl();
+    const key = getSupabaseAnonKey() || getSupabaseServiceRoleKey();
+    supabaseInstance = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+  }
+  return supabaseInstance;
+}
+
+export function getSupabaseAdmin(): SupabaseClient | null {
+  if (!isSupabaseConfigured()) return null;
+  if (!supabaseAdminInstance) {
+    const url = getSupabaseUrl();
+    const key = getSupabaseServiceRoleKey() || getSupabaseAnonKey();
+    supabaseAdminInstance = createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+  }
+  return supabaseAdminInstance;
+}
+
+export function mapSupabaseRowToProduct(row: any): Product {
+  const baseData: Partial<Product> = (row.data && typeof row.data === 'object') ? row.data : {};
+
+  let parsedSpecs: { key: string; value: string }[] = baseData.specifications || [];
+  let parsedFeatures: string[] = baseData.features || [];
+  let parsedImages: string[] = baseData.images || [];
+  let parsedTags: string[] = baseData.tags || [];
+
+  if (row.specifications) {
+    if (Array.isArray(row.specifications)) {
+      parsedSpecs = row.specifications;
+    } else if (typeof row.specifications === 'object') {
+      parsedSpecs = Object.entries(row.specifications).map(([key, value]) => ({
+        key,
+        value: String(value),
+      }));
+    }
   }
 
-  public init(): boolean {
-    let supabaseUrl =
-      process.env.SUPABASE_URL?.trim() ||
-      process.env.VITE_SUPABASE_URL?.trim();
+  if (Array.isArray(row.features) && row.features.length > 0) {
+    parsedFeatures = row.features;
+  }
 
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-    const anonKey =
-      process.env.SUPABASE_ANON_KEY?.trim() ||
-      process.env.VITE_SUPABASE_ANON_KEY?.trim() ||
-      process.env.SUPABASE_KEY?.trim();
+  const primaryImg = row.image_url || row.image || baseData.image_url || baseData.imageUrl || (Array.isArray(baseData.images) && baseData.images[0]) || '';
+  if (Array.isArray(row.images) && row.images.length > 0) {
+    parsedImages = row.images;
+  } else if (primaryImg && (!parsedImages || parsedImages.length === 0)) {
+    parsedImages = [primaryImg];
+  } else if (primaryImg && parsedImages.length > 0 && parsedImages[0] !== primaryImg) {
+    parsedImages = [primaryImg, ...parsedImages.filter((u) => u !== primaryImg)];
+  }
 
-    // Auto-detect Supabase URL from DATABASE_URL if not explicitly set
-    if (!supabaseUrl && process.env.DATABASE_URL) {
-      try {
-        const u = new URL(process.env.DATABASE_URL);
-        // e.g. postgres.kfzaeumrupzshpyzshpd in username or db.kfzaeumrupzshpyzshpd.supabase.co
-        const match =
-          u.username.match(/^postgres\.([a-z0-9_-]+)$/) ||
-          u.hostname.match(/^db\.([a-z0-9_-]+)\.supabase\.co$/) ||
-          u.hostname.match(/([a-z0-9_-]+)\.pooler\.supabase\.com$/);
+  if (Array.isArray(row.tags) && row.tags.length > 0) {
+    parsedTags = row.tags;
+  }
 
-        if (match && match[1]) {
-          supabaseUrl = `https://${match[1]}.supabase.co`;
-        }
-      } catch {
-        // ignore parse error
+  const priceNum = row.price !== undefined && row.price !== null ? Number(row.price) : Number(baseData.price || 0);
+  const discountPriceNum =
+    row.discount_price !== undefined && row.discount_price !== null
+      ? Number(row.discount_price)
+      : row.sale_price !== undefined && row.sale_price !== null
+      ? Number(row.sale_price)
+      : baseData.salePrice !== undefined
+      ? Number(baseData.salePrice)
+      : undefined;
+
+  const stockNum = row.stock !== undefined && row.stock !== null ? Number(row.stock) : Number(baseData.stock ?? 0);
+
+  let statusVal: Product['status'] = baseData.status || 'active';
+  if (typeof row.status === 'string' && ['active', 'draft', 'archived', 'inactive'].includes(row.status)) {
+    statusVal = row.status as Product['status'];
+  } else if (row.is_active === false) {
+    statusVal = 'inactive';
+  } else if (row.is_active === true && !row.status && !baseData.status) {
+    statusVal = 'active';
+  }
+
+  const catId = row.category_id || row.categoryId || baseData.categoryId || 'cat-solar';
+  const catName = row.category || row.category_name || baseData.categoryName || '';
+
+  return {
+    ...baseData,
+    id: String(row.id || baseData.id),
+    name: row.name || baseData.name || 'Untitled Product',
+    slug: row.slug || baseData.slug || String(row.name || 'product').toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    sku: row.sku || baseData.sku || `MAG-${String(row.id).slice(-5).toUpperCase()}`,
+    categoryId: String(catId),
+    categoryName: catName,
+    subcategoryId: row.subcategory_id || baseData.subcategoryId,
+    subcategoryName: row.subcategory_name || baseData.subcategoryName,
+    brand: row.brand || baseData.brand || 'M.A. Group',
+    description: row.description ?? baseData.description ?? '',
+    shortDescription: row.short_description || baseData.shortDescription || (row.description ? String(row.description).slice(0, 140) : ''),
+    specifications: parsedSpecs,
+    features: parsedFeatures,
+    images: parsedImages,
+    image_url: primaryImg || parsedImages[0] || '',
+    imageUrl: primaryImg || parsedImages[0] || '',
+    price: priceNum,
+    salePrice: discountPriceNum,
+    costPrice: row.cost_price !== undefined && row.cost_price !== null ? Number(row.cost_price) : baseData.costPrice,
+    stock: stockNum,
+    lowStockThreshold: Number(row.low_stock_threshold ?? baseData.lowStockThreshold ?? 5),
+    warranty: row.warranty || baseData.warranty || 'Official M.A. Group Warranty',
+    tags: parsedTags,
+    status: statusVal,
+    isArchived: Boolean(row.is_archived ?? baseData.isArchived ?? (statusVal === 'archived')),
+    isFeatured: row.featured !== undefined && row.featured !== null
+      ? Boolean(row.featured)
+      : row.is_featured !== undefined && row.is_featured !== null
+      ? Boolean(row.is_featured)
+      : Boolean(baseData.isFeatured),
+    isBestSeller: Boolean(row.is_best_seller ?? baseData.isBestSeller ?? false),
+    isNewArrival: Boolean(row.is_new_arrival ?? baseData.isNewArrival ?? false),
+    isDeal: Boolean(row.is_deal ?? baseData.isDeal ?? Boolean(discountPriceNum && discountPriceNum < priceNum)),
+    rating: Number(row.rating ?? baseData.rating ?? 4.8),
+    reviewCount: Number(row.review_count ?? baseData.reviewCount ?? 12),
+    createdAt: row.created_at || baseData.createdAt || new Date().toISOString(),
+    updatedAt: row.updated_at || baseData.updatedAt || new Date().toISOString(),
+  };
+}
+
+export function mapProductToSupabaseRow(product: Product): Record<string, any> {
+  const primaryImage =
+    product.image_url ||
+    product.imageUrl ||
+    (Array.isArray(product.images) && product.images.length > 0 ? product.images[0] : '');
+
+  const normalizedImages =
+    Array.isArray(product.images) && product.images.length > 0
+      ? product.images
+      : primaryImage
+      ? [primaryImage]
+      : [];
+
+  const updatedProduct: Product = {
+    ...product,
+    images: normalizedImages,
+    image_url: primaryImage,
+    imageUrl: primaryImage,
+  };
+
+  return {
+    id: updatedProduct.id,
+    name: updatedProduct.name,
+    slug: updatedProduct.slug,
+    sku: updatedProduct.sku,
+    brand: updatedProduct.brand,
+    category: updatedProduct.categoryName || updatedProduct.categoryId,
+    category_id: updatedProduct.categoryId,
+    price: Number(updatedProduct.price || 0),
+    discount_price: updatedProduct.salePrice !== undefined ? Number(updatedProduct.salePrice) : null,
+    stock: Number(updatedProduct.stock ?? 0),
+    description: updatedProduct.description || '',
+    short_description: updatedProduct.shortDescription || '',
+    image_url: primaryImage,
+    images: normalizedImages,
+    specifications: updatedProduct.specifications || [],
+    features: updatedProduct.features || [],
+    warranty: updatedProduct.warranty || '',
+    is_active: updatedProduct.status !== 'inactive' && updatedProduct.status !== 'archived' && !updatedProduct.isArchived,
+    featured: Boolean(updatedProduct.isFeatured),
+    is_featured: Boolean(updatedProduct.isFeatured),
+    is_best_seller: Boolean(updatedProduct.isBestSeller),
+    status: updatedProduct.status || 'active',
+    data: updatedProduct,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+export function mapProductToCoreSupabaseRow(product: Product, includeId: boolean = true): Record<string, any> {
+  const primaryImage =
+    product.image_url ||
+    product.imageUrl ||
+    (Array.isArray(product.images) && product.images.length > 0 ? product.images[0] : '');
+
+  const row: Record<string, any> = {
+    name: product.name || 'Untitled Equipment',
+    price: Number(product.price || 0),
+    stock: Number(product.stock ?? 0),
+    category: product.categoryName || product.categoryId || 'General',
+    description: product.description || '',
+    image_url: primaryImage || '',
+    featured: Boolean(product.isFeatured),
+  };
+  if (includeId && product.id) {
+    row.id = product.id;
+  }
+  return row;
+}
+
+export function mapSupabaseRowToCategory(row: any): Category {
+  const baseData: Partial<Category> = (row.data && typeof row.data === 'object') ? row.data : {};
+  const idStr = String(row.id || baseData.id || `cat-${Date.now()}`);
+  const nameStr = row.name || baseData.name || 'Category';
+  return {
+    ...baseData,
+    id: idStr,
+    name: nameStr,
+    slug: row.slug || baseData.slug || String(nameStr).toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    description: row.description ?? baseData.description ?? '',
+    image: row.image_url || row.image || baseData.image || '',
+    iconName: row.icon_name || baseData.iconName || 'Zap',
+    displayOrder: Number(row.display_order ?? baseData.displayOrder ?? 0),
+    isActive: row.is_active !== undefined && row.is_active !== null ? Boolean(row.is_active) : (baseData.isActive ?? true),
+    subcategories: Array.isArray(row.subcategories) ? row.subcategories : (baseData.subcategories || []),
+  };
+}
+
+export function mapCategoryToSupabaseRow(cat: Category): Record<string, any> {
+  return {
+    id: cat.id,
+    name: cat.name,
+    slug: cat.slug,
+    description: cat.description || '',
+    image_url: cat.image || '',
+    icon_name: cat.iconName || 'Zap',
+    display_order: Number(cat.displayOrder ?? 0),
+    is_active: cat.isActive !== false,
+    subcategories: cat.subcategories || [],
+    data: cat,
+  };
+}
+
+export function mapSupabaseRowToOrder(row: any): Order {
+  const baseData: Partial<Order> = (row.data && typeof row.data === 'object') ? row.data : {};
+  const createdAt = row.created_at || baseData.createdAt || new Date().toISOString();
+  const statusVal = (row.order_status || row.status || baseData.status || 'Pending') as Order['status'];
+  const itemsList = Array.isArray(row.items)
+    ? row.items
+    : Array.isArray(row.products)
+    ? row.products
+    : baseData.items || [];
+
+  const totalNum = Number(
+    row.total_amount ?? row.total_price ?? row.grand_total ?? baseData.grandTotal ?? 0
+  );
+
+  return {
+    ...baseData,
+    id: String(row.id || baseData.id),
+    orderNumber: row.order_number || baseData.orderNumber || `MAG-${String(row.id).slice(-4).toUpperCase()}`,
+    customer: baseData.customer || {
+      fullName: row.customer_name || 'Valued Customer',
+      phone: row.phone || '',
+      whatsappNumber: row.whatsapp || row.phone || '',
+      email: row.email || '',
+      addressLine: row.address || '',
+      city: row.city || 'Lahore',
+      province: row.province || 'Punjab',
+      landmark: row.landmark || '',
+    },
+    items: itemsList,
+    subtotal: Number(row.subtotal ?? baseData.subtotal ?? totalNum),
+    discount: Number(row.discount ?? baseData.discount ?? 0),
+    shippingFee: Number(row.shipping_fee ?? baseData.shippingFee ?? 0),
+    grandTotal: totalNum,
+    status: statusVal,
+    paymentMethod: 'Cash on Delivery',
+    paymentStatus: (row.payment_status || baseData.paymentStatus || 'COD Pending') as Order['paymentStatus'],
+    couponCode: row.coupon_code || baseData.couponCode,
+    trackingNumber: row.tracking_number || baseData.trackingNumber,
+    courierName: row.courier_name || baseData.courierName,
+    customerNotes: row.notes || baseData.customerNotes,
+    internalNotes: baseData.internalNotes,
+    timeline: Array.isArray(row.timeline) && row.timeline.length > 0
+      ? row.timeline
+      : baseData.timeline || [{ status: statusVal, timestamp: createdAt, note: 'Order received via Cash on Delivery' }],
+    createdAt,
+    updatedAt: row.updated_at || baseData.updatedAt || createdAt,
+  };
+}
+
+export function mapOrderToSupabaseRow(order: Order): Record<string, any> {
+  return {
+    id: order.id,
+    order_number: order.orderNumber,
+    customer_name: order.customer?.fullName || '',
+    phone: order.customer?.phone || '',
+    whatsapp: order.customer?.whatsappNumber || order.customer?.phone || '',
+    email: order.customer?.email || '',
+    city: order.customer?.city || '',
+    province: order.customer?.province || '',
+    address: order.customer?.addressLine || '',
+    landmark: order.customer?.landmark || '',
+    products: order.items || [],
+    items: order.items || [],
+    subtotal: Number(order.subtotal || 0),
+    discount: Number(order.discount || 0),
+    shipping_fee: Number(order.shippingFee || 0),
+    total_amount: Number(order.grandTotal || 0),
+    total_price: Number(order.grandTotal || 0),
+    payment_method: 'COD',
+    payment_status: order.paymentStatus || 'COD Pending',
+    order_status: order.status || 'Pending',
+    status: order.status || 'Pending',
+    notes: order.customerNotes || '',
+    tracking_number: order.trackingNumber || '',
+    courier_name: order.courierName || '',
+    timeline: order.timeline || [],
+    data: order,
+    created_at: order.createdAt || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+export function mapOrderToCoreSupabaseRow(order: Order, includeId: boolean = true): Record<string, any> {
+  const row: Record<string, any> = {
+    customer_name: order.customer?.fullName || 'Customer',
+    phone: order.customer?.phone || '',
+    address: `${order.customer?.addressLine || ''}${order.customer?.city ? `, ${order.customer.city}` : ''}`,
+    products: order.items || [],
+    total_amount: Number(order.grandTotal || 0),
+    payment_method: 'COD',
+    order_status: order.status || 'Pending',
+  };
+  if (includeId && order.id) {
+    row.id = order.id;
+  }
+  return row;
+}
+
+export async function fetchAllSupabaseProducts(): Promise<Product[] | null> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return null;
+  try {
+    const { data, error } = await sb
+      .from('products')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) {
+      const { data: fallbackData, error: fallbackErr } = await sb.from('products').select('*');
+      if (fallbackErr) return null;
+      return (fallbackData || []).map(mapSupabaseRowToProduct);
+    }
+    if (!data) return [];
+    return data.map(mapSupabaseRowToProduct);
+  } catch {
+    return null;
+  }
+}
+
+export async function upsertSupabaseProduct(product: Product): Promise<{ ok: boolean; product?: Product; error?: string }> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return { ok: false, error: 'Supabase is not configured' };
+  try {
+    const row = mapProductToSupabaseRow(product);
+    const { data, error } = await sb.from('products').upsert(row, { onConflict: 'id' }).select('*').maybeSingle();
+    if (error) {
+      const coreWithId = mapProductToCoreSupabaseRow(product, true);
+      const { data: fb1Data, error: fb1Err } = await sb.from('products').upsert(coreWithId, { onConflict: 'id' }).select('*').maybeSingle();
+      if (!fb1Err) {
+        return { ok: true, product: fb1Data ? mapSupabaseRowToProduct(fb1Data) : product };
       }
+
+      const coreWithoutId = mapProductToCoreSupabaseRow(product, false);
+      if (product.id) {
+        const { data: existingRows } = await sb.from('products').select('id').eq('id', product.id).limit(1);
+        if (existingRows && existingRows.length > 0) {
+          const { data: updData, error: updErr } = await sb.from('products').update(coreWithoutId).eq('id', product.id).select('*').maybeSingle();
+          if (!updErr) {
+            return { ok: true, product: updData ? mapSupabaseRowToProduct(updData) : product };
+          }
+        }
+      }
+      const { data: insData, error: insErr } = await sb.from('products').insert(coreWithoutId).select('*').maybeSingle();
+      if (insErr) {
+        return { ok: false, error: insErr.message };
+      }
+      return { ok: true, product: insData ? mapSupabaseRowToProduct(insData) : product };
     }
+    return { ok: true, product: data ? mapSupabaseRowToProduct(data) : product };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Unknown Supabase error' };
+  }
+}
 
-    const key = serviceKey || anonKey;
+export async function deleteSupabaseProductById(id: string): Promise<{ ok: boolean; error?: string }> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return { ok: false, error: 'Supabase is not configured' };
+  try {
+    const { error } = await sb.from('products').delete().eq('id', id);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to delete product' };
+  }
+}
 
-    if (supabaseUrl && key) {
-      this.url = supabaseUrl;
-      this.key = key;
-      this.isServiceRole = !!serviceKey;
-      this.client = createClient(supabaseUrl, key, {
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false,
-        },
-      });
-      console.log(`✅ Supabase client initialized for [${this.url}] (Key type: ${this.isServiceRole ? 'Service Role' : 'Anon/Standard'})`);
-      return true;
+export async function fetchAllSupabaseCategories(): Promise<Category[] | null> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return null;
+  try {
+    const { data, error } = await sb
+      .from('categories')
+      .select('*')
+      .order('created_at', { ascending: true });
+    if (error) {
+      const { data: fallbackData, error: fallbackErr } = await sb.from('categories').select('*');
+      if (fallbackErr) return null;
+      return (fallbackData || []).map(mapSupabaseRowToCategory);
     }
+    if (!data) return [];
+    return data.map(mapSupabaseRowToCategory);
+  } catch {
+    return null;
+  }
+}
 
-    this.client = null;
+export async function upsertSupabaseCategory(category: Category): Promise<{ ok: boolean; category?: Category; error?: string }> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return { ok: false, error: 'Supabase is not configured' };
+  try {
+    const row = mapCategoryToSupabaseRow(category);
+    const { data, error } = await sb.from('categories').upsert(row, { onConflict: 'id' }).select('*').maybeSingle();
+    if (error) {
+      const minimalWithId = {
+        id: category.id,
+        name: category.name,
+        slug: category.slug,
+        description: category.description || '',
+      };
+      const { data: fb1Data, error: fb1Err } = await sb.from('categories').upsert(minimalWithId, { onConflict: 'id' }).select('*').maybeSingle();
+      if (!fb1Err) {
+        return { ok: true, category: fb1Data ? { ...category, ...mapSupabaseRowToCategory(fb1Data), image: category.image || fb1Data.image_url || '' } : category };
+      }
+
+      const minimalNoId = {
+        name: category.name,
+        slug: category.slug,
+        description: category.description || '',
+      };
+      if (category.id) {
+        const { data: existing } = await sb.from('categories').select('id').eq('id', category.id).limit(1);
+        if (existing && existing.length > 0) {
+          const { data: updData, error: updErr } = await sb.from('categories').update(minimalNoId).eq('id', category.id).select('*').maybeSingle();
+          if (!updErr) {
+            return { ok: true, category: updData ? { ...category, id: String(updData.id) } : category };
+          }
+        }
+      }
+      const { data: insData, error: insErr } = await sb.from('categories').insert(minimalNoId).select('*').maybeSingle();
+      if (insErr) {
+        const { data: nameOnlyData, error: nameOnlyErr } = await sb.from('categories').insert({ name: category.name }).select('*').maybeSingle();
+        if (nameOnlyErr) return { ok: false, error: insErr.message };
+        return { ok: true, category: nameOnlyData ? { ...category, id: String(nameOnlyData.id) } : category };
+      }
+      return { ok: true, category: insData ? { ...category, id: String(insData.id) } : category };
+    }
+    return { ok: true, category: data ? mapSupabaseRowToCategory(data) : category };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to save category' };
+  }
+}
+
+export async function deleteSupabaseCategoryById(id: string): Promise<{ ok: boolean; error?: string }> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return { ok: false, error: 'Supabase is not configured' };
+  try {
+    const { error } = await sb.from('categories').delete().eq('id', id);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to delete category' };
+  }
+}
+
+export async function fetchAllSupabaseOrders(): Promise<Order[] | null> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return null;
+  try {
+    const { data, error } = await sb
+      .from('orders')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) {
+      const { data: fallbackData, error: fallbackErr } = await sb.from('orders').select('*');
+      if (fallbackErr) return null;
+      return (fallbackData || []).map(mapSupabaseRowToOrder);
+    }
+    if (!data) return [];
+    return data.map(mapSupabaseRowToOrder);
+  } catch {
+    return null;
+  }
+}
+
+export async function upsertSupabaseOrder(order: Order): Promise<{ ok: boolean; order?: Order; error?: string }> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return { ok: false, error: 'Supabase is not configured' };
+  try {
+    const row = mapOrderToSupabaseRow(order);
+    const { data, error } = await sb.from('orders').upsert(row, { onConflict: 'id' }).select('*').maybeSingle();
+    if (error) {
+      const coreWithId = mapOrderToCoreSupabaseRow(order, true);
+      const { data: fb1Data, error: fb1Err } = await sb.from('orders').upsert(coreWithId, { onConflict: 'id' }).select('*').maybeSingle();
+      if (!fb1Err) {
+        return { ok: true, order: fb1Data ? mapSupabaseRowToOrder(fb1Data) : order };
+      }
+
+      const coreNoId = mapOrderToCoreSupabaseRow(order, false);
+      if (order.id) {
+        const { data: existing } = await sb.from('orders').select('id').eq('id', order.id).limit(1);
+        if (existing && existing.length > 0) {
+          const { data: updData, error: updErr } = await sb.from('orders').update(coreNoId).eq('id', order.id).select('*').maybeSingle();
+          if (!updErr) {
+            return { ok: true, order: updData ? mapSupabaseRowToOrder(updData) : order };
+          }
+        }
+      }
+      const { data: insData, error: insErr } = await sb.from('orders').insert(coreNoId).select('*').maybeSingle();
+      if (insErr) return { ok: false, error: insErr.message };
+      return { ok: true, order: insData ? mapSupabaseRowToOrder(insData) : order };
+    }
+    return { ok: true, order: data ? mapSupabaseRowToOrder(data) : order };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to save order' };
+  }
+}
+
+export async function deleteSupabaseOrderById(id: string): Promise<{ ok: boolean; error?: string }> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return { ok: false, error: 'Supabase is not configured' };
+  try {
+    const { error } = await sb.from('orders').delete().eq('id', id);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to delete order' };
+  }
+}
+
+export async function fetchSupabaseTableData<T>(tableName: string): Promise<T[] | null> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return null;
+  try {
+    const { data, error } = await sb.from(tableName).select('*');
+    if (error) return null;
+    if (!data) return [];
+    return data.map((row: any) => (row.data && typeof row.data === 'object' ? { ...row.data, id: row.id } : row)) as T[];
+  } catch {
+    return null;
+  }
+}
+
+export async function upsertSupabaseGenericRow(tableName: string, id: string, item: any): Promise<boolean> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return false;
+  try {
+    const { error } = await sb.from(tableName).upsert({ id, data: item });
+    return !error;
+  } catch {
     return false;
   }
-
-  public isConfigured(): boolean {
-    return !!this.client;
-  }
-
-  public getStatus(): SupabaseConfigStatus {
-    const configured = this.isConfigured();
-    let maskedKey: string | undefined;
-    if (this.key) {
-      maskedKey = this.key.slice(0, 6) + '...' + this.key.slice(-4);
-    }
-
-    return {
-      configured,
-      connected: configured,
-      url: this.url || undefined,
-      maskedKey,
-      hasServiceRoleKey: this.isServiceRole,
-      tableExists: Boolean(this.tableExists),
-      storageReady: true,
-      notice: this.tableExists === false
-        ? 'Table "public.products" needs to be created in Supabase SQL Editor. Run supabase_schema.sql to enable remote table sync.'
-        : undefined,
-    };
-  }
-
-  public getClient(): SupabaseClient | null {
-    return this.client;
-  }
-
-  /**
-   * Reset table cache to force re-checking if table exists in Supabase
-   */
-  public resetTableCheck(): void {
-    this.tableExists = null;
-    this.lastTableCheckTime = 0;
-  }
-
-  /**
-   * Map a Supabase row to the application Product interface
-   */
-  public mapRowToProduct(row: any): Product {
-    const extra = row.data && typeof row.data === 'object' ? row.data : {};
-    const primaryImg = row.image_url || extra.images?.[0] || 'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=800&q=80';
-    
-    let images: string[] = [];
-    if (Array.isArray(row.images) && row.images.length > 0) {
-      images = row.images;
-    } else if (Array.isArray(extra.images) && extra.images.length > 0) {
-      images = extra.images;
-    } else {
-      images = [primaryImg];
-    }
-
-    const categoryStr = row.category || extra.categoryName || extra.categoryId || 'General';
-
-    return {
-      id: String(row.id),
-      name: String(row.name || extra.name || 'Untitled Product'),
-      slug: String(
-        row.slug ||
-        extra.slug ||
-        (row.name ? row.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : row.id)
-      ),
-      sku: String(row.sku || extra.sku || `SKU-${String(row.id).slice(-6)}`),
-      categoryId: String(row.category_id || extra.categoryId || (categoryStr.startsWith('cat-') ? categoryStr : 'cat-solar')),
-      categoryName: String(row.category_name || extra.categoryName || categoryStr),
-      subcategoryId: row.subcategory_id || extra.subcategoryId,
-      subcategoryName: row.subcategory_name || extra.subcategoryName,
-      brand: String(row.brand || extra.brand || 'M.A. Certified'),
-      description: String(row.description || extra.description || ''),
-      shortDescription: String(row.short_description || extra.shortDescription || (row.description ? String(row.description).slice(0, 150) : '')),
-      specifications: Array.isArray(row.specifications)
-        ? row.specifications
-        : Array.isArray(extra.specifications)
-        ? extra.specifications
-        : [{ key: 'Quality', value: 'Certified Genuine' }],
-      features: Array.isArray(row.features)
-        ? row.features
-        : Array.isArray(extra.features)
-        ? extra.features
-        : ['Premium Industrial Standard', 'Verified Warranty'],
-      images,
-      price: Number(row.price) || 0,
-      salePrice: row.sale_price !== null && row.sale_price !== undefined ? Number(row.sale_price) : (extra.salePrice ? Number(extra.salePrice) : undefined),
-      stock: typeof row.stock === 'number' ? row.stock : (Number(row.stock) || 0),
-      lowStockThreshold: Number(row.low_stock_threshold || extra.lowStockThreshold || 5),
-      warranty: String(row.warranty || extra.warranty || '1 Year Official Warranty'),
-      tags: Array.isArray(row.tags) ? row.tags : Array.isArray(extra.tags) ? extra.tags : ['products'],
-      status: (row.status || extra.status || 'active') as any,
-      isFeatured: Boolean(row.is_featured ?? extra.isFeatured ?? false),
-      isBestSeller: Boolean(row.is_bestseller ?? extra.isBestSeller ?? false),
-      isNewArrival: Boolean(row.is_new_arrival ?? extra.isNewArrival ?? false),
-      isDeal: Boolean(row.is_deal ?? extra.isDeal ?? false),
-      rating: Number(row.rating || extra.rating || 5.0),
-      reviewCount: Number(row.review_count || extra.reviewCount || 1),
-      createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
-      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
-    };
-  }
-
-  /**
-   * Fetch all products from Supabase table 'products'
-   */
-  public async getProducts(): Promise<Product[] | null> {
-    if (!this.client) return null;
-
-    // Rate-limit checks if table was recently confirmed missing (check at most once per 60 seconds)
-    if (this.tableExists === false && Date.now() - this.lastTableCheckTime < 60000) {
-      return null;
-    }
-
-    try {
-      this.lastTableCheckTime = Date.now();
-      const { data, error } = await this.client
-        .from('products')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        if (error.code === 'PGRST205' || error.message.includes('Could not find the table') || error.message.includes('schema cache')) {
-          this.tableExists = false;
-          console.log('ℹ️ Supabase table "public.products" not yet created in Supabase schema. Catalog running in local storage mode. Run supabase_schema.sql to sync.');
-        } else {
-          console.log('ℹ️ Supabase notice:', error.message);
-        }
-        return null;
-      }
-
-      this.tableExists = true;
-      if (!data) return [];
-      return data.map((row) => this.mapRowToProduct(row));
-    } catch (err: any) {
-      console.log('ℹ️ Supabase getProducts notice:', err?.message || err);
-      return null;
-    }
-  }
-
-  /**
-   * Insert product into Supabase table 'products'
-   * Validates and ensures persistence
-   */
-  public async insertProduct(product: Product): Promise<{ success: boolean; data?: Product; error?: string }> {
-    if (!this.client) {
-      return { success: false, error: 'Supabase client is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY in environment variables.' };
-    }
-
-    const imageUrl = product.images?.[0] || '';
-    const now = new Date().toISOString();
-
-    // 1. Try inserting with rich schema (includes extra fields + data jsonb)
-    const richRow: Record<string, any> = {
-      id: product.id,
-      name: product.name,
-      description: product.description || '',
-      price: Number(product.price) || 0,
-      category: product.categoryName || product.categoryId || 'General',
-      image_url: imageUrl,
-      stock: Number(product.stock) || 0,
-      slug: product.slug,
-      sku: product.sku,
-      brand: product.brand || 'M.A. Certified',
-      category_id: product.categoryId,
-      category_name: product.categoryName,
-      sale_price: product.salePrice ? Number(product.salePrice) : null,
-      images: product.images || [imageUrl],
-      features: product.features || [],
-      specifications: product.specifications || [],
-      warranty: product.warranty || '',
-      tags: product.tags || [],
-      status: product.status || 'active',
-      is_featured: product.isFeatured || false,
-      is_bestseller: product.isBestSeller || false,
-      is_deal: product.isDeal || false,
-      rating: product.rating || 5.0,
-      review_count: product.reviewCount || 1,
-      data: product,
-      created_at: product.createdAt || now,
-      updated_at: now,
-    };
-
-    let { data, error } = await this.client
-      .from('products')
-      .insert(richRow)
-      .select()
-      .single();
-
-    // 2. If it failed due to schema mismatch (e.g. table only has core 9 columns), retry with core 9 columns
-    if (error && (error.message.includes('column') || error.code === '42703' || error.message.includes('not find'))) {
-      console.warn('ℹ️ Supabase schema has subset of columns. Retrying insert with core 9 columns (id, name, description, price, category, image_url, stock, created_at, updated_at)...');
-      
-      const coreRow = {
-        id: product.id,
-        name: product.name,
-        description: product.description || '',
-        price: Number(product.price) || 0,
-        category: product.categoryName || product.categoryId || 'General',
-        image_url: imageUrl,
-        stock: Number(product.stock) || 0,
-        created_at: product.createdAt || now,
-        updated_at: now,
-      };
-
-      const retryRes = await this.client
-        .from('products')
-        .insert(coreRow)
-        .select()
-        .single();
-
-      data = retryRes.data;
-      error = retryRes.error;
-    }
-
-    if (error) {
-      if (error.code === 'PGRST205' || error.message.includes('Could not find the table') || error.message.includes('schema cache')) {
-        this.tableExists = false;
-        console.log('ℹ️ Notice: Table "public.products" not found in Supabase schema. Execute supabase_schema.sql to create table.');
-      } else {
-        console.log('ℹ️ Supabase insertProduct notice:', error.message);
-      }
-      return { success: false, error: `Supabase insert failed: ${error.message}` };
-    }
-
-    this.tableExists = true;
-    return { success: true, data: this.mapRowToProduct(data) };
-  }
-
-  /**
-   * Update existing product in Supabase table 'products'
-   */
-  public async updateProduct(id: string, updates: Partial<Product>): Promise<{ success: boolean; data?: Product; error?: string }> {
-    if (!this.client) {
-      return { success: false, error: 'Supabase client is not configured.' };
-    }
-
-    const imageUrl = updates.images?.[0];
-    const now = new Date().toISOString();
-
-    const richUpdates: Record<string, any> = {
-      updated_at: now,
-    };
-
-    if (updates.name !== undefined) richUpdates.name = updates.name;
-    if (updates.description !== undefined) richUpdates.description = updates.description;
-    if (updates.price !== undefined) richUpdates.price = Number(updates.price);
-    if (updates.stock !== undefined) richUpdates.stock = Number(updates.stock);
-    if (updates.categoryName || updates.categoryId) {
-      richUpdates.category = updates.categoryName || updates.categoryId;
-      richUpdates.category_name = updates.categoryName;
-      richUpdates.category_id = updates.categoryId;
-    }
-    if (imageUrl) {
-      richUpdates.image_url = imageUrl;
-      richUpdates.images = updates.images;
-    }
-    if (updates.sku !== undefined) richUpdates.sku = updates.sku;
-    if (updates.brand !== undefined) richUpdates.brand = updates.brand;
-    if (updates.salePrice !== undefined) richUpdates.sale_price = updates.salePrice ? Number(updates.salePrice) : null;
-    if (updates.features !== undefined) richUpdates.features = updates.features;
-    if (updates.specifications !== undefined) richUpdates.specifications = updates.specifications;
-    if (updates.warranty !== undefined) richUpdates.warranty = updates.warranty;
-    if (updates.tags !== undefined) richUpdates.tags = updates.tags;
-    if (updates.status !== undefined) richUpdates.status = updates.status;
-    if (updates.isFeatured !== undefined) richUpdates.is_featured = updates.isFeatured;
-    if (updates.isBestSeller !== undefined) richUpdates.is_bestseller = updates.isBestSeller;
-    if (updates.isDeal !== undefined) richUpdates.is_deal = updates.isDeal;
-    richUpdates.data = updates;
-
-    let { data, error } = await this.client
-      .from('products')
-      .update(richUpdates)
-      .eq('id', id)
-      .select()
-      .single();
-
-    // Fallback to core columns if column mismatch
-    if (error && (error.message.includes('column') || error.code === '42703')) {
-      const coreUpdates: Record<string, any> = { updated_at: now };
-      if (updates.name !== undefined) coreUpdates.name = updates.name;
-      if (updates.description !== undefined) coreUpdates.description = updates.description;
-      if (updates.price !== undefined) coreUpdates.price = Number(updates.price);
-      if (updates.stock !== undefined) coreUpdates.stock = Number(updates.stock);
-      if (updates.categoryName || updates.categoryId) {
-        coreUpdates.category = updates.categoryName || updates.categoryId;
-      }
-      if (imageUrl) coreUpdates.image_url = imageUrl;
-
-      const retryRes = await this.client
-        .from('products')
-        .update(coreUpdates)
-        .eq('id', id)
-        .select()
-        .single();
-
-      data = retryRes.data;
-      error = retryRes.error;
-    }
-
-    if (error) {
-      return { success: false, error: `Supabase update failed: ${error.message}` };
-    }
-
-    return { success: true, data: this.mapRowToProduct(data) };
-  }
-
-  /**
-   * Delete product row from Supabase
-   */
-  public async deleteProduct(id: string): Promise<{ success: boolean; error?: string; tableMissing?: boolean; deletedCount?: number }> {
-    if (!this.client) {
-      return { success: false, error: 'Supabase client is not configured.' };
-    }
-
-    try {
-      const { data, error } = await this.client
-        .from('products')
-        .delete()
-        .eq('id', id)
-        .select();
-
-      if (error) {
-        const isTableMissing =
-          error.code === 'PGRST205' ||
-          error.message.includes('Could not find the table') ||
-          error.message.includes('schema cache');
-        if (isTableMissing) {
-          this.tableExists = false;
-          return { success: false, tableMissing: true, error: error.message };
-        }
-        return { success: false, error: `Supabase delete failed: ${error.message}` };
-      }
-
-      this.tableExists = true;
-      return { success: true, deletedCount: data ? data.length : 1 };
-    } catch (err: any) {
-      return { success: false, error: err?.message || String(err) };
-    }
-  }
-
-  /**
-   * Delete category row from Supabase
-   */
-  public async deleteCategory(id: string): Promise<{ success: boolean; error?: string; tableMissing?: boolean; deletedCount?: number }> {
-    if (!this.client) {
-      return { success: false, error: 'Supabase client is not configured.' };
-    }
-
-    try {
-      const { data, error } = await this.client
-        .from('categories')
-        .delete()
-        .eq('id', id)
-        .select();
-
-      if (error) {
-        const isTableMissing =
-          error.code === 'PGRST205' ||
-          error.message.includes('Could not find the table') ||
-          error.message.includes('schema cache');
-        if (isTableMissing) {
-          return { success: false, tableMissing: true, error: error.message };
-        }
-        return { success: false, error: `Supabase delete failed: ${error.message}` };
-      }
-
-      return { success: true, deletedCount: data ? data.length : 1 };
-    } catch (err: any) {
-      return { success: false, error: err?.message || String(err) };
-    }
-  }
-
-  /**
-   * Delete order row from Supabase
-   */
-  public async deleteOrder(id: string): Promise<{ success: boolean; error?: string; tableMissing?: boolean; deletedCount?: number }> {
-    if (!this.client) {
-      return { success: false, error: 'Supabase client is not configured.' };
-    }
-
-    try {
-      const { data, error } = await this.client
-        .from('orders')
-        .delete()
-        .eq('id', id)
-        .select();
-
-      if (error) {
-        const isTableMissing =
-          error.code === 'PGRST205' ||
-          error.message.includes('Could not find the table') ||
-          error.message.includes('schema cache');
-        if (isTableMissing) {
-          return { success: false, tableMissing: true, error: error.message };
-        }
-        return { success: false, error: `Supabase delete failed: ${error.message}` };
-      }
-
-      return { success: true, deletedCount: data ? data.length : 1 };
-    } catch (err: any) {
-      return { success: false, error: err?.message || String(err) };
-    }
-  }
-
-  /**
-   * Fetch all categories from Supabase
-   */
-  public async getCategories(): Promise<Category[] | null> {
-    if (!this.client) return null;
-    try {
-      const { data, error } = await this.client
-        .from('categories')
-        .select('*')
-        .order('display_order', { ascending: true });
-
-      if (error) {
-        return null;
-      }
-      if (!data || data.length === 0) return [];
-
-      return data.map((row: any) => {
-        if (row.data && typeof row.data === 'object' && row.data.name) {
-          return {
-            ...row.data,
-            id: row.id || row.data.id,
-            name: row.name || row.data.name,
-            slug: row.slug || row.data.slug,
-            description: row.description || row.data.description || '',
-            image: row.image || row.data.image || '',
-            displayOrder: Number(row.display_order ?? row.data.displayOrder ?? 0),
-          };
-        }
-        return {
-          id: row.id,
-          name: row.name,
-          slug: row.slug,
-          description: row.description || '',
-          image: row.image || '',
-          iconName: row.icon_name || 'Grid',
-          displayOrder: Number(row.display_order || 0),
-          isActive: row.is_active !== false,
-          subcategories: row.subcategories || [],
-        };
-      });
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Insert category into Supabase
-   */
-  public async insertCategory(cat: Category): Promise<{ success: boolean; data?: Category; error?: string }> {
-    if (!this.client) {
-      return { success: false, error: 'Supabase client is not configured.' };
-    }
-    const now = new Date().toISOString();
-    try {
-      const row: Record<string, any> = {
-        id: cat.id,
-        name: cat.name,
-        slug: cat.slug,
-        description: cat.description || '',
-        image: cat.image || '',
-        display_order: cat.displayOrder ?? 0,
-        data: cat,
-        created_at: now,
-        updated_at: now,
-      };
-
-      const { data, error } = await this.client
-        .from('categories')
-        .insert(row)
-        .select()
-        .single();
-
-      if (error) {
-        if (error.message.includes('column') || error.code === '42703') {
-          const minimalRow = {
-            id: cat.id,
-            name: cat.name,
-            slug: cat.slug,
-            description: cat.description || '',
-            image: cat.image || '',
-            display_order: cat.displayOrder ?? 0,
-          };
-          const res = await this.client.from('categories').insert(minimalRow).select().single();
-          if (res.error) return { success: false, error: res.error.message };
-          return { success: true, data: cat };
-        }
-        return { success: false, error: error.message };
-      }
-
-      return { success: true, data: cat };
-    } catch (err: any) {
-      return { success: false, error: err?.message || String(err) };
-    }
-  }
-
-  /**
-   * Update category in Supabase
-   */
-  public async updateCategory(id: string, updates: Partial<Category>): Promise<{ success: boolean; data?: Category; error?: string }> {
-    if (!this.client) {
-      return { success: false, error: 'Supabase client is not configured.' };
-    }
-    const now = new Date().toISOString();
-    try {
-      const updateData: Record<string, any> = {
-        updated_at: now,
-      };
-      if (updates.name !== undefined) updateData.name = updates.name;
-      if (updates.slug !== undefined) updateData.slug = updates.slug;
-      if (updates.description !== undefined) updateData.description = updates.description;
-      if (updates.image !== undefined) updateData.image = updates.image;
-      if (updates.displayOrder !== undefined) updateData.display_order = updates.displayOrder;
-      updateData.data = updates;
-
-      const { data, error } = await this.client
-        .from('categories')
-        .update(updateData)
-        .eq('id', id)
-        .select()
-        .single();
-
-      if (error) {
-        if (error.message.includes('column') || error.code === '42703') {
-          delete updateData.data;
-          const res = await this.client.from('categories').update(updateData).eq('id', id).select().single();
-          if (res.error) return { success: false, error: res.error.message };
-          return { success: true };
-        }
-        return { success: false, error: error.message };
-      }
-
-      return { success: true };
-    } catch (err: any) {
-      return { success: false, error: err?.message || String(err) };
-    }
-  }
-
-  /**
-   * Fetch all orders from Supabase
-   */
-  public async getOrders(): Promise<Order[] | null> {
-    if (!this.client) return null;
-    try {
-      const { data, error } = await this.client
-        .from('orders')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) return null;
-      if (!data || data.length === 0) return [];
-
-      return data.map((row: any) => {
-        if (row.data && typeof row.data === 'object' && row.data.orderNumber) {
-          return {
-            ...row.data,
-            id: row.id || row.data.id,
-            orderNumber: row.order_number || row.data.orderNumber,
-            status: row.status || row.data.status,
-            grandTotal: Number(row.grand_total ?? row.data.grandTotal ?? 0),
-          };
-        }
-        return {
-          id: row.id,
-          orderNumber: row.order_number,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-          status: row.status || 'Pending Verification',
-          customer: {
-            fullName: row.customer_name || 'Customer',
-            phone: row.customer_phone || '',
-            addressLine: '',
-            city: row.customer_city || '',
-            province: 'Punjab',
-          },
-          items: [],
-          subtotal: Number(row.grand_total || 0),
-          shippingFee: 0,
-          discountAmount: 0,
-          grandTotal: Number(row.grand_total || 0),
-          paymentMethod: row.payment_method || 'Cash on Delivery (COD)',
-          paymentStatus: row.payment_status || 'Pending (COD on Delivery)',
-        };
-      });
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Insert order into Supabase
-   */
-  public async insertOrder(order: Order): Promise<{ success: boolean; data?: Order; error?: string }> {
-    if (!this.client) {
-      return { success: false, error: 'Supabase client is not configured.' };
-    }
-    const now = new Date().toISOString();
-    try {
-      const row: Record<string, any> = {
-        id: order.id,
-        order_number: order.orderNumber,
-        customer_name: order.customer?.fullName || 'Customer',
-        customer_phone: order.customer?.phone || '',
-        customer_city: order.customer?.city || '',
-        grand_total: order.grandTotal || 0,
-        status: order.status || 'Pending Verification',
-        payment_method: order.paymentMethod || 'Cash on Delivery (COD)',
-        payment_status: order.paymentStatus || 'Pending (COD on Delivery)',
-        data: order,
-        created_at: order.createdAt || now,
-        updated_at: now,
-      };
-
-      const { data, error } = await this.client
-        .from('orders')
-        .insert(row)
-        .select()
-        .single();
-
-      if (error) {
-        if (error.message.includes('column') || error.code === '42703') {
-          delete row.data;
-          const res = await this.client.from('orders').insert(row).select().single();
-          if (res.error) return { success: false, error: res.error.message };
-          return { success: true, data: order };
-        }
-        return { success: false, error: error.message };
-      }
-
-      return { success: true, data: order };
-    } catch (err: any) {
-      return { success: false, error: err?.message || String(err) };
-    }
-  }
-
-  /**
-   * Update order status/details in Supabase
-   */
-  public async updateOrder(id: string, updates: Partial<Order>): Promise<{ success: boolean; data?: Order; error?: string }> {
-    if (!this.client) {
-      return { success: false, error: 'Supabase client is not configured.' };
-    }
-    const now = new Date().toISOString();
-    try {
-      const updateData: Record<string, any> = {
-        updated_at: now,
-      };
-      if (updates.status) updateData.status = updates.status;
-      if (updates.paymentStatus) updateData.payment_status = updates.paymentStatus;
-      if (updates.grandTotal !== undefined) updateData.grand_total = updates.grandTotal;
-      updateData.data = updates;
-
-      const { data, error } = await this.client
-        .from('orders')
-        .update(updateData)
-        .eq('id', id)
-        .select()
-        .single();
-
-      if (error) {
-        if (error.message.includes('column') || error.code === '42703') {
-          delete updateData.data;
-          const res = await this.client.from('orders').update(updateData).eq('id', id).select().single();
-          if (res.error) return { success: false, error: res.error.message };
-          return { success: true };
-        }
-        return { success: false, error: error.message };
-      }
-
-      return { success: true };
-    } catch (err: any) {
-      return { success: false, error: err?.message || String(err) };
-    }
-  }
-
-  /**
-   * Upload image to Supabase Storage and return public URL
-   */
-  public async uploadImage(
-    buffer: Buffer | Uint8Array,
-    filename: string,
-    contentType: string = 'image/jpeg'
-  ): Promise<{ success: boolean; url?: string; error?: string }> {
-    if (!this.client) {
-      return { success: false, error: 'Supabase client not configured.' };
-    }
-
-    const bucketName = 'product-images';
-    const cleanFilename = `${Date.now()}-${filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-
-    try {
-      // 1. Try uploading to bucket 'product-images'
-      let uploadResult = await this.client.storage
-        .from(bucketName)
-        .upload(cleanFilename, buffer, {
-          contentType,
-          upsert: true,
-        });
-
-      // If bucket doesn't exist, try creating it or fallback to 'products' bucket
-      if (uploadResult.error && (uploadResult.error.message.includes('not found') || uploadResult.error.message.includes('bucket'))) {
-        try {
-          await this.client.storage.createBucket(bucketName, { public: true });
-          uploadResult = await this.client.storage
-            .from(bucketName)
-            .upload(cleanFilename, buffer, {
-              contentType,
-              upsert: true,
-            });
-        } catch {
-          // ignore bucket creation error and try 'products' bucket
-          uploadResult = await this.client.storage
-            .from('products')
-            .upload(cleanFilename, buffer, {
-              contentType,
-              upsert: true,
-            });
-        }
-      }
-
-      if (uploadResult.error) {
-        return { success: false, error: `Storage upload failed: ${uploadResult.error.message}` };
-      }
-
-      // 2. Obtain Public URL
-      const { data: urlData } = this.client.storage
-        .from(bucketName)
-        .getPublicUrl(cleanFilename);
-
-      if (!urlData || !urlData.publicUrl) {
-        return { success: false, error: 'Failed to generate public URL for uploaded image.' };
-      }
-
-      return { success: true, url: urlData.publicUrl };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Storage upload error' };
-    }
-  }
-
-  /**
-   * Delete an image from Supabase Storage bucket 'product-images'
-   */
-  public async deleteImage(imageUrlOrPath: string): Promise<{ success: boolean; error?: string }> {
-    if (!this.client || !imageUrlOrPath) {
-      return { success: false, error: 'No client or path' };
-    }
-
-    try {
-      let filePath = '';
-      if (imageUrlOrPath.includes('/product-images/')) {
-        filePath = imageUrlOrPath.split('/product-images/')[1].split('?')[0];
-      } else if (!imageUrlOrPath.startsWith('http://') && !imageUrlOrPath.startsWith('https://')) {
-        filePath = imageUrlOrPath.replace(/^product-images\//, '');
-      }
-
-      if (!filePath) {
-        // External URL (e.g. Unsplash), no storage deletion needed
-        return { success: true };
-      }
-
-      const { error } = await this.client.storage
-        .from('product-images')
-        .remove([filePath]);
-
-      if (error) {
-        console.warn('ℹ️ Notice deleting image from storage:', error.message);
-        return { success: false, error: error.message };
-      }
-
-      return { success: true };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Storage delete error' };
-    }
+}
+
+export async function deleteSupabaseGenericRow(tableName: string, id: string): Promise<boolean> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return false;
+  try {
+    const { error } = await sb.from(tableName).delete().eq('id', id);
+    return !error;
+  } catch {
+    return false;
   }
 }
 
-export const supabaseService = new SupabaseService();
-export default supabaseService;
+export async function uploadImageToSupabaseStorage(
+  fileBuffer: Buffer,
+  fileName: string,
+  mimeType: string,
+  bucketName: string = 'product-images'
+): Promise<{ ok: boolean; publicUrl?: string; error?: string }> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) {
+    return { ok: false, error: 'Supabase client is not configured' };
+  }
+
+  try {
+    const { data: buckets } = await sb.storage.listBuckets();
+    const bucketExists = buckets?.some((b) => b.name === bucketName);
+    if (!bucketExists) {
+      await sb.storage.createBucket(bucketName, {
+        public: true,
+        fileSizeLimit: 8388608, // 8MB
+      });
+    }
+
+    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const storagePath = `uploads/${Date.now()}-${safeName}`;
+
+    const { error: uploadError } = await sb.storage
+      .from(bucketName)
+      .upload(storagePath, fileBuffer, {
+        contentType: mimeType,
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.error('[Supabase Storage] Upload error:', uploadError.message);
+      return { ok: false, error: uploadError.message };
+    }
+
+    const { data: publicUrlData } = sb.storage.from(bucketName).getPublicUrl(storagePath);
+    return {
+      ok: true,
+      publicUrl: publicUrlData.publicUrl,
+    };
+  } catch (err: any) {
+    console.error('[Supabase Storage] Exception:', err);
+    return { ok: false, error: err?.message || 'Storage upload failed' };
+  }
+}
+
+export async function deleteImageFromSupabaseStorage(
+  imageUrl: string,
+  bucketName: string = 'product-images'
+): Promise<{ ok: boolean; error?: string }> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return { ok: false, error: 'Supabase client is not configured' };
+
+  try {
+    const marker = `/${bucketName}/`;
+    const idx = imageUrl.indexOf(marker);
+    if (idx === -1) return { ok: true };
+    const storagePath = imageUrl.slice(idx + marker.length);
+    if (!storagePath) return { ok: true };
+
+    const { error } = await sb.storage.from(bucketName).remove([storagePath]);
+    if (error) return { ok: false, error: error.message };
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to delete image' };
+  }
+}
+
+function isTableMissingError(err?: string): boolean {
+  if (!err) return false;
+  const lower = err.toLowerCase();
+  return (
+    lower.includes('not found') ||
+    lower.includes('schema cache') ||
+    lower.includes('could not find the table') ||
+    lower.includes('relation') && lower.includes('does not exist')
+  );
+}
+
+/**
+ * Unified Supabase Service singleton used by server/app.ts
+ */
+export const supabaseService = {
+  isConfigured(): boolean {
+    return isSupabaseConfigured();
+  },
+
+  getStatus() {
+    return {
+      configured: isSupabaseConfigured(),
+      url: getSupabaseUrl() ? 'Connected' : 'Not Configured',
+      hasAnonKey: Boolean(getSupabaseAnonKey()),
+      hasServiceRoleKey: Boolean(getSupabaseServiceRoleKey()),
+      storageBucket: 'product-images',
+    };
+  },
+
+  async getProducts(): Promise<Product[] | null> {
+    return fetchAllSupabaseProducts();
+  },
+
+  async insertProduct(product: Product): Promise<{ success: boolean; data?: Product; error?: string; tableMissing?: boolean }> {
+    const res = await upsertSupabaseProduct(product);
+    return {
+      success: res.ok,
+      data: res.product || product,
+      error: res.error,
+      tableMissing: isTableMissingError(res.error),
+    };
+  },
+
+  async updateProduct(id: string, updates: Partial<Product>, existingProduct?: Product): Promise<{ success: boolean; data?: Product; error?: string; tableMissing?: boolean }> {
+    const sb = getSupabaseAdmin() || getSupabase();
+    if (!sb) return { success: false, error: 'Supabase not configured' };
+
+    let base: Product | undefined = existingProduct;
+    if (!base) {
+      const { data: row } = await sb.from('products').select('*').eq('id', id).maybeSingle();
+      if (row) {
+        base = mapSupabaseRowToProduct(row);
+      }
+    }
+
+    const merged: Product = {
+      ...(base || ({
+        id,
+        name: updates.name || 'Product',
+        slug: updates.slug || 'product',
+        sku: updates.sku || `SKU-${id}`,
+        categoryId: updates.categoryId || 'cat-solar',
+        categoryName: updates.categoryName || 'Solar Products & Equipment',
+        brand: updates.brand || 'M.A. Group',
+        description: updates.description || '',
+        shortDescription: updates.shortDescription || '',
+        specifications: updates.specifications || [],
+        features: updates.features || [],
+        images: updates.images || [],
+        price: Number(updates.price ?? 0),
+        stock: Number(updates.stock ?? 0),
+        lowStockThreshold: 5,
+        warranty: 'Official Warranty',
+        tags: [],
+        status: 'active',
+        rating: 4.8,
+        reviewCount: 10,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      } as Product)),
+      ...updates,
+      id,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (updates.image_url || updates.imageUrl) {
+      const u = updates.image_url || updates.imageUrl || '';
+      merged.image_url = u;
+      merged.imageUrl = u;
+      if (!Array.isArray(merged.images) || merged.images.length === 0) {
+        merged.images = [u];
+      } else if (merged.images[0] !== u) {
+        merged.images = [u, ...merged.images.filter((img) => img !== u)];
+      }
+    } else if (Array.isArray(updates.images) && updates.images.length > 0) {
+      merged.image_url = updates.images[0];
+      merged.imageUrl = updates.images[0];
+    }
+
+    const res = await upsertSupabaseProduct(merged);
+    return {
+      success: res.ok,
+      data: res.product || merged,
+      error: res.error,
+      tableMissing: isTableMissingError(res.error),
+    };
+  },
+
+  async deleteProduct(id: string): Promise<{ success: boolean; error?: string; tableMissing?: boolean }> {
+    const res = await deleteSupabaseProductById(id);
+    return {
+      success: res.ok,
+      error: res.error,
+      tableMissing: isTableMissingError(res.error),
+    };
+  },
+
+  async getCategories(): Promise<Category[] | null> {
+    return fetchAllSupabaseCategories();
+  },
+
+  async insertCategory(category: Category): Promise<{ success: boolean; data?: Category; error?: string; tableMissing?: boolean }> {
+    const res = await upsertSupabaseCategory(category);
+    return {
+      success: res.ok,
+      data: res.category || category,
+      error: res.error,
+      tableMissing: isTableMissingError(res.error),
+    };
+  },
+
+  async updateCategory(id: string, updates: Partial<Category>, existingCategory?: Category): Promise<{ success: boolean; data?: Category; error?: string; tableMissing?: boolean }> {
+    const sb = getSupabaseAdmin() || getSupabase();
+    if (!sb) return { success: false, error: 'Supabase not configured' };
+
+    let base: Category | undefined = existingCategory;
+    if (!base) {
+      const { data: row } = await sb.from('categories').select('*').eq('id', id).maybeSingle();
+      if (row) {
+        base = mapSupabaseRowToCategory(row);
+      }
+    }
+
+    const merged: Category = {
+      ...(base || ({
+        id,
+        name: updates.name || 'Category',
+        slug: updates.slug || 'category',
+        description: updates.description || '',
+        image: updates.image || '',
+        iconName: updates.iconName || 'Zap',
+        displayOrder: updates.displayOrder ?? 1,
+        isActive: updates.isActive ?? true,
+        subcategories: updates.subcategories || [],
+      } as Category)),
+      ...updates,
+      id,
+    };
+
+    const res = await upsertSupabaseCategory(merged);
+    return {
+      success: res.ok,
+      data: res.category || merged,
+      error: res.error,
+      tableMissing: isTableMissingError(res.error),
+    };
+  },
+
+  async deleteCategory(id: string): Promise<{ success: boolean; error?: string; tableMissing?: boolean }> {
+    const res = await deleteSupabaseCategoryById(id);
+    return {
+      success: res.ok,
+      error: res.error,
+      tableMissing: isTableMissingError(res.error),
+    };
+  },
+
+  async getOrders(): Promise<Order[] | null> {
+    return fetchAllSupabaseOrders();
+  },
+
+  async insertOrder(order: Order): Promise<{ success: boolean; data?: Order; error?: string; tableMissing?: boolean }> {
+    const res = await upsertSupabaseOrder(order);
+    return {
+      success: res.ok,
+      data: res.order || order,
+      error: res.error,
+      tableMissing: isTableMissingError(res.error),
+    };
+  },
+
+  async updateOrder(id: string, updates: Partial<Order>, existingOrder?: Order): Promise<{ success: boolean; data?: Order; error?: string; tableMissing?: boolean }> {
+    const sb = getSupabaseAdmin() || getSupabase();
+    if (!sb) return { success: false, error: 'Supabase not configured' };
+
+    let base: Order | undefined = existingOrder;
+    if (!base) {
+      const { data: row } = await sb.from('orders').select('*').eq('id', id).maybeSingle();
+      if (row) {
+        base = mapSupabaseRowToOrder(row);
+      }
+    }
+
+    if (!base) {
+      return { success: false, error: 'Order not found in Supabase' };
+    }
+
+    const merged: Order = {
+      ...base,
+      ...updates,
+      id: base.id,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const res = await upsertSupabaseOrder(merged);
+    return {
+      success: res.ok,
+      data: res.order || merged,
+      error: res.error,
+      tableMissing: isTableMissingError(res.error),
+    };
+  },
+
+  async deleteOrder(id: string): Promise<{ success: boolean; error?: string; tableMissing?: boolean }> {
+    const res = await deleteSupabaseOrderById(id);
+    return {
+      success: res.ok,
+      error: res.error,
+      tableMissing: isTableMissingError(res.error),
+    };
+  },
+
+  async getSettings(): Promise<Partial<StoreSettings> | null> {
+    const rows = await fetchSupabaseTableData<any>('store_settings');
+    if (rows && rows.length > 0) {
+      const main = rows.find((r: any) => r.id === 'default') || rows[0];
+      if (main) {
+        const { id, ...rest } = main;
+        return rest;
+      }
+    }
+    return null;
+  },
+
+  async saveSettings(settings: StoreSettings): Promise<boolean> {
+    return upsertSupabaseGenericRow('store_settings', 'default', settings);
+  },
+
+  async getSecuritySettings(): Promise<Partial<AdminSecuritySettings> | null> {
+    const rows = await fetchSupabaseTableData<any>('security_settings');
+    if (rows && rows.length > 0) {
+      const main = rows.find((r: any) => r.id === 'default') || rows[0];
+      if (main) {
+        const { id, ...rest } = main;
+        return rest;
+      }
+    }
+    return null;
+  },
+
+  async saveSecuritySettings(security: AdminSecuritySettings): Promise<boolean> {
+    return upsertSupabaseGenericRow('security_settings', 'default', security);
+  },
+
+  async uploadImage(buffer: Buffer, filename: string, mimeType: string): Promise<{ success: boolean; url?: string; error?: string }> {
+    const res = await uploadImageToSupabaseStorage(buffer, filename, mimeType, 'product-images');
+    return {
+      success: res.ok,
+      url: res.publicUrl,
+      error: res.error,
+    };
+  },
+
+  async deleteImage(url: string): Promise<{ success: boolean; error?: string }> {
+    const res = await deleteImageFromSupabaseStorage(url, 'product-images');
+    return {
+      success: res.ok,
+      error: res.error,
+    };
+  },
+};

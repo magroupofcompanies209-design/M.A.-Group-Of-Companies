@@ -459,11 +459,21 @@ app.post('/api/products', requireAdminAuth, async (req: Request, res: Response) 
 // PUT /api/products/:id (Admin Protected)
 app.put('/api/products/:id', requireAdminAuth, async (req: Request, res: Response) => {
   const id = req.params.id;
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaProducts = await supabaseService.getProducts();
+      if (supaProducts && supaProducts.length > 0) {
+        db.syncProducts(supaProducts);
+      }
+    } catch {
+      // ignore
+    }
+  }
   const existingProduct = db.getProductById(id);
   const oldImages = existingProduct?.images || (existingProduct?.imageUrl ? [existingProduct.imageUrl] : []);
 
   if (supabaseService.isConfigured()) {
-    const supaRes = await supabaseService.updateProduct(id, req.body);
+    const supaRes = await supabaseService.updateProduct(id, req.body, existingProduct);
     const isTableMissing =
       supaRes.error &&
       (supaRes.error.includes('not found') ||
@@ -479,7 +489,6 @@ app.put('/api/products/:id', requireAdminAuth, async (req: Request, res: Respons
 
     const updated = db.updateProduct(id, req.body);
 
-    // Requirement 7: If the new image uploaded successfully and replaced old image, remove old image if not used elsewhere
     const newImages = req.body.images || (req.body.imageUrl || req.body.image_url ? [req.body.imageUrl || req.body.image_url] : []);
     for (const oldImg of oldImages) {
       if (oldImg && oldImg.includes('/product-images/') && !newImages.includes(oldImg)) {
@@ -760,10 +769,12 @@ app.delete('/api/upload', requireAdminAuth, async (req: Request, res: Response) 
 // ==========================================
 
 app.get('/api/categories', async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   if (supabaseService.isConfigured()) {
     try {
       const supaCats = await supabaseService.getCategories();
       if (supaCats && supaCats.length > 0) {
+        db.syncCategories(supaCats);
         return res.json(supaCats);
       }
     } catch {
@@ -774,6 +785,13 @@ app.get('/api/categories', async (_req: Request, res: Response) => {
 });
 
 app.post('/api/categories', requireAdminAuth, async (req: Request, res: Response) => {
+  if (!req.body.name || !String(req.body.name).trim()) {
+    return res.status(400).json({ error: 'Category name is required.' });
+  }
+  if (supabaseService.isConfigured()) {
+    const supaCats = await supabaseService.getCategories();
+    if (supaCats && supaCats.length > 0) db.syncCategories(supaCats);
+  }
   const newCat = {
     ...req.body,
     id: req.body.id || 'cat-' + Date.now(),
@@ -787,25 +805,42 @@ app.post('/api/categories', requireAdminAuth, async (req: Request, res: Response
   };
   const created = db.createCategory(newCat);
   if (supabaseService.isConfigured()) {
-    supabaseService.insertCategory(created).catch((err) => {
-      console.warn('Could not mirror category to Supabase:', err);
-    });
+    const supaRes = await supabaseService.insertCategory(created);
+    if (!supaRes.success && !supaRes.tableMissing) {
+      db.deleteCategory(created.id);
+      return res.status(500).json({ error: supaRes.error || 'Failed to save category to Supabase.' });
+    }
+    if (supaRes.data && supaRes.data.id !== created.id) {
+      db.deleteCategory(created.id);
+      const synced = db.createCategory({ ...created, id: supaRes.data.id });
+      db.logAction('CREATE_CATEGORY', (req as any).adminSession.username, `Created category: ${synced.name}`);
+      return res.status(201).json(synced);
+    }
   }
   db.logAction('CREATE_CATEGORY', (req as any).adminSession.username, `Created category: ${created.name}`);
   return res.status(201).json(created);
 });
 
 app.put('/api/categories/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  if (supabaseService.isConfigured()) {
+    const supaCats = await supabaseService.getCategories();
+    if (supaCats && supaCats.length > 0) db.syncCategories(supaCats);
+  }
+  const existing = db.getCategoryById(req.params.id);
   const updated = db.updateCategory(req.params.id, req.body);
-  if (!updated) {
+  if (!updated && !supabaseService.isConfigured()) {
     return res.status(404).json({ error: 'Category not found' });
   }
   if (supabaseService.isConfigured()) {
-    supabaseService.updateCategory(req.params.id, req.body).catch((err) => {
-      console.warn('Could not mirror category update to Supabase:', err);
-    });
+    const supaRes = await supabaseService.updateCategory(req.params.id, req.body, updated || existing);
+    if (!supaRes.success && !supaRes.tableMissing) {
+      return res.status(500).json({ error: supaRes.error || 'Failed to update category in Supabase.' });
+    }
+    if (supaRes.data && !updated) {
+      return res.json(supaRes.data);
+    }
   }
-  db.logAction('UPDATE_CATEGORY', (req as any).adminSession.username, `Updated category: ${updated.name}`);
+  db.logAction('UPDATE_CATEGORY', (req as any).adminSession.username, `Updated category: ${updated?.name || req.params.id}`);
   return res.json(updated);
 });
 
@@ -815,20 +850,29 @@ app.delete('/api/categories/:id', requireRole(['superadmin', 'admin']), async (r
     return res.status(400).json({ success: false, error: 'Category ID is required.' });
   }
 
+  if (supabaseService.isConfigured()) {
+    const [supaCats, supaProds] = await Promise.all([
+      supabaseService.getCategories(),
+      supabaseService.getProducts(),
+    ]);
+    if (supaCats && supaCats.length > 0) db.syncCategories(supaCats);
+    if (supaProds && supaProds.length > 0) db.syncProducts(supaProds);
+  }
+
   const existingCategory = db.getCategories().find((c) => c.id === id);
-  if (!existingCategory) {
+  if (!existingCategory && !supabaseService.isConfigured()) {
     return res.status(404).json({ success: false, error: 'Category not found.' });
   }
 
   // Safety Check: Check if any products belong to this category
   const associatedProducts = db.getProducts().filter(
-    (p) => p.categoryId === id || (p.categoryName && p.categoryName.toLowerCase() === existingCategory.name.toLowerCase())
+    (p) => !p.isArchived && (p.categoryId === id || (existingCategory && p.categoryName && p.categoryName.toLowerCase() === existingCategory.name.toLowerCase()))
   );
 
   if (associatedProducts.length > 0) {
     return res.status(400).json({
       success: false,
-      error: `Cannot delete category "${existingCategory.name}". It is currently assigned to ${associatedProducts.length} product(s) (such as "${associatedProducts[0].name}"). Please reassign or delete these products first.`,
+      error: `Cannot delete category "${existingCategory?.name || id}". It is currently assigned to ${associatedProducts.length} product(s) (such as "${associatedProducts[0].name}"). Please reassign or delete these products first.`,
       productCount: associatedProducts.length,
       productNames: associatedProducts.slice(0, 3).map((p) => p.name),
     });
@@ -845,12 +889,8 @@ app.delete('/api/categories/:id', requireRole(['superadmin', 'admin']), async (r
     }
   }
 
-  const success = db.deleteCategory(id);
-  if (!success) {
-    return res.status(404).json({ success: false, error: 'Category not found in store.' });
-  }
-
-  db.logAction('DELETE_CATEGORY', (req as any).adminSession.username, `Deleted category: ${existingCategory.name} (ID: ${id})`);
+  db.deleteCategory(id);
+  db.logAction('DELETE_CATEGORY', (req as any).adminSession.username, `Deleted category: ${existingCategory?.name || id} (ID: ${id})`);
   return res.json({ success: true, message: 'Category deleted successfully.' });
 });
 
@@ -911,14 +951,16 @@ app.delete('/api/brands/:id', requireAdminAuth, (req: Request, res: Response) =>
 
 // GET /api/orders (Admin Protected)
 app.get('/api/orders', requireAdminAuth, async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   const { status, search } = req.query;
   let orders = db.getOrders();
 
   if (supabaseService.isConfigured()) {
     try {
       const supaOrders = await supabaseService.getOrders();
-      if (supaOrders && supaOrders.length > 0) {
+      if (supaOrders) {
         orders = supaOrders;
+        db.syncOrders(supaOrders);
       }
     } catch {
       // Fallback to local db
@@ -947,8 +989,8 @@ app.get('/api/orders', requireAdminAuth, async (req: Request, res: Response) => 
 // In-memory idempotency cache to protect against duplicate requests/double clicks
 const recentIdempotencyStore = new Map<string, { order: Order; timestamp: number }>();
 
-// POST /api/orders (Public COD Checkout with Idempotency Protection)
-app.post('/api/orders', (req: Request, res: Response) => {
+// POST /api/orders (Public COD Checkout with Idempotency & Stock Validation)
+app.post('/api/orders', async (req: Request, res: Response) => {
   const { customer, items, couponCode, customerNotes } = req.body;
 
   if (!customer || !customer.fullName || !customer.phone || !customer.addressLine || !customer.city) {
@@ -957,6 +999,37 @@ app.post('/api/orders', (req: Request, res: Response) => {
 
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'Cart is empty.' });
+  }
+
+  if (supabaseService.isConfigured()) {
+    try {
+      const [supaProducts, supaOrders] = await Promise.all([
+        supabaseService.getProducts(),
+        supabaseService.getOrders(),
+      ]);
+      if (supaProducts && supaProducts.length > 0) db.syncProducts(supaProducts);
+      if (supaOrders) db.syncOrders(supaOrders);
+    } catch {
+      // Fallback to local cache
+    }
+  }
+
+  // Validate real-time stock against database before creating order
+  for (const item of items) {
+    const product = db.getProductById(item.productId);
+    if (product) {
+      if (product.status === 'inactive' || product.status === 'archived' || product.isArchived) {
+        return res.status(400).json({ error: `"${product.name}" is no longer available for purchase.` });
+      }
+      if (product.stock < item.quantity) {
+        return res.status(400).json({
+          error:
+            product.stock <= 0
+              ? `"${product.name}" is currently out of stock.`
+              : `Only ${product.stock} unit(s) of "${product.name}" available in stock.`,
+        });
+      }
+    }
   }
 
   const settings = db.getSettings();
@@ -1001,7 +1074,7 @@ app.post('/api/orders', (req: Request, res: Response) => {
   const shippingFee = subtotal >= settings.freeShippingThreshold ? 0 : settings.standardShippingFee;
   const grandTotal = Math.max(0, subtotal - discount + shippingFee);
 
-  // Idempotency Check: 2. Prevent accidental rapid double-clicks (same phone + same grandTotal + items length within 15 seconds)
+  // Idempotency Check: 2. Prevent accidental rapid double-clicks
   const cleanPhone = customer.phone.replace(/[^0-9]/g, '');
   const nowMs = Date.now();
   const recentDuplicate = db.getOrders().find((o) => {
@@ -1048,7 +1121,6 @@ app.post('/api/orders', (req: Request, res: Response) => {
   if (idempotencyKey) {
     recentIdempotencyStore.set(idempotencyKey, { order: savedOrder, timestamp: Date.now() });
   }
-  // Periodically clean cache older than 15 minutes
   if (recentIdempotencyStore.size > 200) {
     const fifteenMinAgo = Date.now() - 15 * 60 * 1000;
     for (const [key, val] of recentIdempotencyStore.entries()) {
@@ -1057,11 +1129,23 @@ app.post('/api/orders', (req: Request, res: Response) => {
       }
     }
   }
+
   if (supabaseService.isConfigured()) {
-    supabaseService.insertOrder(newOrder).catch((err) => {
-      console.warn('Could not mirror order to Supabase:', err);
-    });
+    const supaOrderRes = await supabaseService.insertOrder(savedOrder);
+    if (!supaOrderRes.success && !supaOrderRes.tableMissing) {
+      return res.status(500).json({
+        error: supaOrderRes.error || 'Failed to save order to Supabase database.',
+      });
+    }
+    // Sync updated product stock quantities to Supabase
+    for (const item of items) {
+      const updatedProd = db.getProductById(item.productId);
+      if (updatedProd) {
+        await supabaseService.updateProduct(updatedProd.id, { stock: updatedProd.stock }, updatedProd);
+      }
+    }
   }
+
   db.logAction(
     'NEW_ORDER_COD',
     customer.fullName,
@@ -1072,9 +1156,21 @@ app.post('/api/orders', (req: Request, res: Response) => {
 });
 
 // GET /api/orders/track/:orderNumber (Public Order Tracking)
-app.get('/api/orders/track/:orderNumber', (req: Request, res: Response) => {
+app.get('/api/orders/track/:orderNumber', async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   const { orderNumber } = req.params;
   const { phone } = req.query;
+
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaOrders = await supabaseService.getOrders();
+      if (supaOrders) {
+        db.syncOrders(supaOrders);
+      }
+    } catch {
+      // Fallback to local
+    }
+  }
 
   const order = db.getOrderById(orderNumber);
   if (!order) {
@@ -1095,6 +1191,20 @@ app.get('/api/orders/track/:orderNumber', (req: Request, res: Response) => {
 // PATCH /api/orders/:id/status (Admin Protected)
 app.patch('/api/orders/:id/status', requireAdminAuth, async (req: Request, res: Response) => {
   const { status, paymentStatus, trackingNumber, courierName, internalNotes } = req.body;
+
+  if (supabaseService.isConfigured()) {
+    try {
+      const [supaOrders, supaProducts] = await Promise.all([
+        supabaseService.getOrders(),
+        supabaseService.getProducts(),
+      ]);
+      if (supaOrders) db.syncOrders(supaOrders);
+      if (supaProducts && supaProducts.length > 0) db.syncProducts(supaProducts);
+    } catch {
+      // fallback
+    }
+  }
+
   const existingOrder = db.getOrderById(req.params.id);
 
   if (!existingOrder) {
@@ -1109,20 +1219,34 @@ app.patch('/api/orders/:id/status', requireAdminAuth, async (req: Request, res: 
 
   if (status && status !== existingOrder.status) {
     updates.status = status as OrderStatus;
-    const timeline = existingOrder.timeline || [];
+    const timeline = [...(existingOrder.timeline || [])];
     timeline.push({
       status: status as OrderStatus,
       timestamp: new Date().toISOString(),
       note: req.body.note || `Status updated to ${status} by admin.`,
     });
     updates.timeline = timeline;
+    if (status === 'Delivered' && !paymentStatus) {
+      updates.paymentStatus = 'COD Collected';
+    } else if (status === 'Cancelled' && !paymentStatus) {
+      updates.paymentStatus = 'Cancelled';
+    }
   }
 
   const updated = db.updateOrder(req.params.id, updates);
-  if (supabaseService.isConfigured()) {
-    supabaseService.updateOrder(req.params.id, updates).catch((err) => {
-      console.warn('Could not mirror order update to Supabase:', err);
-    });
+  if (supabaseService.isConfigured() && updated) {
+    const supaRes = await supabaseService.updateOrder(req.params.id, updates, updated);
+    if (!supaRes.success && !supaRes.tableMissing) {
+      return res.status(500).json({ error: supaRes.error || 'Failed to update order status in Supabase.' });
+    }
+    if (status && status !== existingOrder.status) {
+      for (const item of updated.items || []) {
+        const prod = db.getProductById(item.productId);
+        if (prod) {
+          await supabaseService.updateProduct(prod.id, { stock: prod.stock }, prod);
+        }
+      }
+    }
   }
   db.logAction(
     'UPDATE_ORDER_STATUS',
@@ -1188,10 +1312,14 @@ app.get('/api/admin/inventory/ledger', requireRole(['superadmin', 'admin', 'mana
 });
 
 // POST /api/admin/inventory/adjust (Safe server-side stock adjustment)
-app.post('/api/admin/inventory/adjust', requireRole(['superadmin', 'admin', 'manager']), (req: Request, res: Response) => {
+app.post('/api/admin/inventory/adjust', requireRole(['superadmin', 'admin', 'manager']), async (req: Request, res: Response) => {
   const { productId, change, reason, referenceId, notes } = req.body;
   if (!productId || typeof change !== 'number' || change === 0) {
     return res.status(400).json({ error: 'Product ID and non-zero numeric stock change are required.' });
+  }
+  if (supabaseService.isConfigured()) {
+    const supaProds = await supabaseService.getProducts();
+    if (supaProds && supaProds.length > 0) db.syncProducts(supaProds);
   }
   const session = (req as any).adminSession;
   const result = db.adjustStock(
@@ -1205,6 +1333,13 @@ app.post('/api/admin/inventory/adjust', requireRole(['superadmin', 'admin', 'man
   if (!result.success) {
     return res.status(400).json({ error: result.error });
   }
+  const updatedProd = db.getProductById(productId);
+  if (supabaseService.isConfigured() && updatedProd) {
+    const supaRes = await supabaseService.updateProduct(productId, { stock: updatedProd.stock }, updatedProd);
+    if (!supaRes.success && !supaRes.tableMissing) {
+      return res.status(500).json({ error: supaRes.error || 'Failed to sync stock adjustment to Supabase.' });
+    }
+  }
   return res.json(result);
 });
 
@@ -1213,7 +1348,11 @@ app.post('/api/admin/inventory/adjust', requireRole(['superadmin', 'admin', 'man
 // ==========================================
 
 // GET /api/admin/customers
-app.get('/api/admin/customers', requireRole(['superadmin', 'admin', 'manager', 'staff']), (_req: Request, res: Response) => {
+app.get('/api/admin/customers', requireRole(['superadmin', 'admin', 'manager', 'staff']), async (_req: Request, res: Response) => {
+  if (supabaseService.isConfigured()) {
+    const supaOrders = await supabaseService.getOrders();
+    if (supaOrders) db.syncOrders(supaOrders);
+  }
   const customers = db.getCustomers();
   return res.json(customers);
 });
@@ -1356,12 +1495,27 @@ app.patch('/api/reviews/:id', requireAdminAuth, (req: Request, res: Response) =>
 // 9. STORE SETTINGS API
 // ==========================================
 
-app.get('/api/settings', (_req: Request, res: Response) => {
+app.get('/api/settings', async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaSettings = await supabaseService.getSettings();
+      if (supaSettings) {
+        const merged = db.updateSettings(supaSettings);
+        return res.json(merged);
+      }
+    } catch {
+      // fallback
+    }
+  }
   return res.json(db.getSettings());
 });
 
-app.put('/api/settings', requireRole(['superadmin', 'admin']), (req: Request, res: Response) => {
+app.put('/api/settings', requireRole(['superadmin', 'admin']), async (req: Request, res: Response) => {
   const updated = db.updateSettings(req.body);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveSettings(updated);
+  }
   db.logAction('UPDATE_SETTINGS', (req as any).adminSession.username, 'Updated store configurations');
   return res.json(updated);
 });

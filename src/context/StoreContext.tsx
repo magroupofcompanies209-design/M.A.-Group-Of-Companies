@@ -108,10 +108,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       // Check if accessing admin or secure-admin
       if (
-        path.includes('secure-admin') ||
         hash.startsWith('secure-admin') ||
-        path.includes('admin') ||
-        hash.startsWith('admin')
+        hash.startsWith('admin') ||
+        (!hash && (path.includes('secure-admin') || path.includes('admin')))
       ) {
         setCurrentRoute('admin');
         return;
@@ -152,19 +151,34 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   const navigate = (route: string, params?: Record<string, string>) => {
-    let hash = `#/${route}`;
-    if (route === 'product' && params?.id) {
+    const cleanRoute = route.replace(/^\/+/, '') || 'home';
+    let hash = `#/${cleanRoute}`;
+    if (cleanRoute === 'product' && params?.id) {
       hash = `#/product/${params.id}`;
-    } else if (route === 'category' && params?.slug) {
+    } else if (cleanRoute === 'category' && params?.slug) {
       hash = `#/category/${params.slug}`;
-    } else if (route === 'order-success' && params?.orderNumber) {
+    } else if (cleanRoute === 'order-success' && params?.orderNumber) {
       hash = `#/order-success/${params.orderNumber}`;
-    } else if (route === 'home') {
+    } else if (cleanRoute === 'home') {
       hash = '#/';
     }
 
+    if (cleanRoute === 'admin' || cleanRoute === 'secure-admin') {
+      try {
+        window.history.pushState({}, '', '/admin');
+      } catch {
+        // Ignore if pushState is restricted
+      }
+    } else if (window.location.pathname.includes('admin')) {
+      try {
+        window.history.pushState({}, '', '/');
+      } catch {
+        // Ignore if pushState is restricted
+      }
+    }
+
     window.location.hash = hash;
-    setCurrentRoute(route);
+    setCurrentRoute(cleanRoute === 'secure-admin' ? 'admin' : cleanRoute);
     setRouteParams(params || {});
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };

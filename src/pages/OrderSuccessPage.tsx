@@ -1,232 +1,242 @@
 import React, { useEffect, useState } from 'react';
-import { useStore } from '../context/StoreContext';
-import { safeJsonResponse } from '../utils/api';
-import { Order } from '../types';
 import {
   CheckCircle2,
-  Printer,
   Truck,
-  ArrowRight,
-  ShieldCheck,
-  Building2,
   Phone,
+  MapPin,
+  FileText,
+  ArrowRight,
+  ShoppingBag,
+  ShieldCheck,
 } from 'lucide-react';
-import { PrintReceiptModal } from '../components/common/PrintReceiptModal';
+import { useStore } from '../context/StoreContext';
+import { safeJsonResponse } from '../utils/api';
+import type { Order } from '../types';
 
 export const OrderSuccessPage: React.FC = () => {
   const { routeParams, navigate } = useStore();
   const orderNumber = routeParams.orderNumber;
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showPrintModal, setShowPrintModal] = useState(false);
 
   useEffect(() => {
-    if (!orderNumber) return;
-    fetch(`/api/orders/track/${orderNumber}`)
-      .then((r) => safeJsonResponse(r, null))
+    if (!orderNumber) {
+      setLoading(false);
+      return;
+    }
+
+    fetch(`/api/orders/track/${encodeURIComponent(orderNumber)}`)
+      .then((r) => safeJsonResponse<Order | null>(r, null))
       .then((data) => {
-        if (data && !data.error) setOrder(data);
+        if (data && !(data as any).error) {
+          setOrder(data);
+        }
       })
-      .catch((err) => console.error(err))
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, [orderNumber]);
 
-  const handlePrint = () => {
-    if (order) {
-      setShowPrintModal(true);
-    } else {
-      window.print();
-    }
-  };
+  if (loading) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-20 text-center text-[#9CA3AF]">
+        Loading your order confirmation...
+      </div>
+    );
+  }
 
-  return (
-    <div className="bg-[#0B0D10] text-[#F8FAFC] py-12 min-h-screen">
-      <div className="max-w-3xl mx-auto px-4">
-        {/* Main Success Card */}
-        <div className="bg-[#111318] rounded-2xl border border-[#2B3038] shadow-2xl overflow-hidden print:shadow-none print:border-none">
-          {/* Top Banner */}
-          <div className="bg-[#0B0D10] text-white p-6 sm:p-8 text-center space-y-3 border-b border-[#1A1D23]">
-            <div className="w-16 h-16 rounded-full bg-emerald-500/10 border-2 border-emerald-400 mx-auto flex items-center justify-center">
-              <CheckCircle2 className="w-8 h-8 text-emerald-400" />
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight uppercase">
-              Order Confirmed!
-            </h1>
-            <p className="text-xs sm:text-sm text-[#E5E7EB] max-w-md mx-auto">
-              Thank you for ordering with M.A. GROUP OF COMPANIES. Your order has been registered in our logistics queue.
-            </p>
-            <div className="inline-block bg-[#111318] border border-[#2B3038] px-4 py-2 rounded-xl text-[#3B82F6] font-mono font-bold text-sm tracking-widest mt-2">
-              Order ID: {orderNumber}
-            </div>
-          </div>
-
-          {/* COD Notice Box */}
-          <div className="p-6 bg-[#1A1D23] border-b border-[#2B3038] text-white flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-[#2563EB] text-white flex items-center justify-center font-bold shrink-0 shadow-md">
-                COD
-              </div>
-              <div className="text-left">
-                <div className="text-xs font-bold uppercase tracking-wider text-[#3B82F6]">
-                  Payment Method: Cash on Delivery
-                </div>
-                <div className="text-xs text-[#E5E7EB]">
-                  Please keep exact cash ready upon delivery to your doorstep.
-                </div>
-              </div>
-            </div>
-
-            {order && (
-              <div className="text-right sm:text-right w-full sm:w-auto pt-2 sm:pt-0 border-t sm:border-none border-[#2B3038]">
-                <div className="text-[11px] text-[#6B7280] uppercase font-semibold">
-                  Amount Due
-                </div>
-                <div className="text-xl font-black text-[#3B82F6]">
-                  Rs. {order.grandTotal.toLocaleString()}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Details Section */}
-          {loading ? (
-            <div className="p-8 text-center text-xs text-[#6B7280]">
-              Retrieving invoice details...
-            </div>
-          ) : order ? (
-            <div className="p-6 sm:p-8 space-y-6">
-              {/* Delivery Address */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-xl bg-[#0B0D10] border border-[#2B3038] text-xs">
-                <div>
-                  <span className="font-bold text-white block mb-1 uppercase text-[11px]">
-                    Delivery Address:
-                  </span>
-                  <div className="text-[#E5E7EB] font-medium">{order.customer.fullName}</div>
-                  <div className="text-[#6B7280]">{order.customer.addressLine}</div>
-                  <div className="text-[#6B7280]">
-                    {order.customer.city}, {order.customer.province}
-                  </div>
-                  <div className="text-[#6B7280] mt-1 font-mono">Phone: {order.customer.phone}</div>
-                </div>
-
-                <div>
-                  <span className="font-bold text-white block mb-1 uppercase text-[11px]">
-                    Shipping &amp; Verification:
-                  </span>
-                  <div className="text-[#6B7280]">
-                    Method: <strong className="text-white">TCS Express Priority (COD)</strong>
-                  </div>
-                  <div className="text-[#6B7280]">
-                    Expected Delivery: <strong className="text-white">2 - 4 Business Days</strong>
-                  </div>
-                  <div className="text-[#6B7280]">
-                    Status: <span className="text-[#3B82F6] font-bold uppercase">{order.status}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Order Items Table */}
-              <div className="space-y-3">
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                  Ordered Products
-                </h3>
-                <div className="border border-[#2B3038] rounded-xl overflow-hidden">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-[#0B0D10] text-[#E5E7EB] font-bold border-b border-[#2B3038]">
-                      <tr>
-                        <th className="p-3">Product</th>
-                        <th className="p-3 text-center">Qty</th>
-                        <th className="p-3 text-right">Price (PKR)</th>
-                        <th className="p-3 text-right">Total (PKR)</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#2B3038]">
-                      {order.items.map((it, idx) => (
-                        <tr key={idx} className="hover:bg-[#1A1D23]/50">
-                          <td className="p-3 font-medium text-white">{it.productName}</td>
-                          <td className="p-3 text-center text-[#E5E7EB]">{it.quantity}</td>
-                          <td className="p-3 text-right text-[#6B7280]">Rs. {it.price.toLocaleString()}</td>
-                          <td className="p-3 text-right font-bold text-white">Rs. {it.total.toLocaleString()}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot className="bg-[#0B0D10] font-semibold border-t border-[#2B3038]">
-                      <tr>
-                        <td colSpan={3} className="p-3 text-right text-[#6B7280]">
-                          Subtotal
-                        </td>
-                        <td className="p-3 text-right text-white">Rs. {order.subtotal.toLocaleString()}</td>
-                      </tr>
-                      {order.discount > 0 && (
-                        <tr>
-                          <td colSpan={3} className="p-3 text-right text-emerald-400">
-                            Discount
-                          </td>
-                          <td className="p-3 text-right text-emerald-400">
-                            -Rs. {order.discount.toLocaleString()}
-                          </td>
-                        </tr>
-                      )}
-                      <tr>
-                        <td colSpan={3} className="p-3 text-right text-[#6B7280]">
-                          Shipping Fee
-                        </td>
-                        <td className="p-3 text-right text-white">
-                          {order.shippingFee === 0 ? 'FREE' : `Rs. ${order.shippingFee.toLocaleString()}`}
-                        </td>
-                      </tr>
-                      <tr className="text-sm font-black text-white bg-[#1A1D23]">
-                        <td colSpan={3} className="p-3 text-right">
-                          Grand Total (COD)
-                        </td>
-                        <td className="p-3 text-right text-[#3B82F6] font-extrabold">
-                          Rs. {order.grandTotal.toLocaleString()}
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-[#2B3038] print:hidden">
-                <button
-                  onClick={handlePrint}
-                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-[#2B3038] text-white hover:bg-[#1A1D23] font-bold text-xs transition-colors cursor-pointer"
-                >
-                  <Printer className="w-4 h-4 text-[#3B82F6]" />
-                  <span>Print Receipt</span>
-                </button>
-
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => navigate('track-order')}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-[#1A1D23] hover:bg-[#2B3038] text-white font-bold text-xs border border-[#2B3038] transition-colors cursor-pointer"
-                  >
-                    <Truck className="w-4 h-4 text-[#3B82F6]" />
-                    <span>Track Shipment</span>
-                  </button>
-
-                  <button
-                    onClick={() => navigate('home')}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold text-xs transition-colors cursor-pointer shadow-lg shadow-blue-500/20"
-                  >
-                    <span>Back to Home</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
+  if (!order) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-16 text-center space-y-4">
+        <h1 className="text-2xl font-black text-white">Order Confirmed</h1>
+        <p className="text-sm text-[#9CA3AF]">
+          Your order {orderNumber ? <strong className="text-blue-400 font-mono">#{orderNumber}</strong> : ''} has been placed via Cash on Delivery. You can track its live status anytime.
+        </p>
+        <div className="flex justify-center gap-4 pt-2">
+          <button
+            onClick={() => navigate('track-order')}
+            className="bg-[#111318] border border-[#2B2F38] hover:border-blue-500/40 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer transition-colors"
+          >
+            Track Order
+          </button>
+          <button
+            onClick={() => navigate('shop')}
+            className="bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer transition-colors"
+          >
+            Continue Shopping
+          </button>
         </div>
       </div>
+    );
+  }
 
-      {showPrintModal && order && (
-        <PrintReceiptModal
-          order={order}
-          onClose={() => setShowPrintModal(false)}
-        />
-      )}
+  return (
+    <div className="bg-[#0B0D10] py-10 min-h-screen">
+      <div className="max-w-3xl mx-auto px-4 space-y-6">
+        {/* Confirmation Banner */}
+        <div className="bg-[#111318] rounded-3xl p-6 sm:p-8 border border-[#1A1D23] shadow-2xl text-center space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto">
+            <CheckCircle2 className="w-10 h-10" />
+          </div>
+
+          <div className="space-y-1">
+            <span className="inline-block px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-extrabold uppercase tracking-wider">
+              Cash on Delivery Confirmed
+            </span>
+            <h1 className="text-2xl sm:text-3xl font-black text-white pt-1">
+              Thank You For Your Order!
+            </h1>
+            <p className="text-sm text-[#9CA3AF] max-w-md mx-auto">
+              Your order has been registered with <strong className="text-white">M.A. GROUP OF COMPANIES</strong>. Our dispatch team will call you shortly to verify delivery.
+            </p>
+          </div>
+
+          {/* Order Number Box */}
+          <div className="inline-flex flex-col sm:flex-row items-center gap-3 sm:gap-6 bg-[#0B0D10] text-white px-6 py-4 rounded-2xl border border-[#1A1D23]">
+            <div className="text-left">
+              <span className="text-[10px] uppercase tracking-wider text-[#9CA3AF] block">
+                Order Tracking Number
+              </span>
+              <span className="text-xl font-black text-blue-400 font-mono tracking-wider">
+                {order.orderNumber}
+              </span>
+            </div>
+            <div className="h-8 w-px bg-[#1A1D23] hidden sm:block"></div>
+            <div className="text-left">
+              <span className="text-[10px] uppercase tracking-wider text-[#9CA3AF] block">
+                Amount Payable on Delivery
+              </span>
+              <span className="text-xl font-black text-emerald-400">
+                Rs. {order.grandTotal.toLocaleString()}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Order Details Card */}
+        <div className="bg-[#111318] rounded-2xl p-6 border border-[#1A1D23] shadow-xl space-y-6">
+          <div className="flex items-center justify-between border-b border-[#1A1D23] pb-4">
+            <div className="flex items-center gap-2">
+              <FileText className="w-5 h-5 text-blue-400" />
+              <h2 className="font-bold text-white">Order Summary &amp; Delivery Details</h2>
+            </div>
+            <span className="px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-bold">
+              Status: {order.status}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 text-xs">
+            <div className="space-y-2 bg-[#0B0D10] p-4 rounded-xl border border-[#1A1D23]">
+              <div className="font-bold text-white flex items-center gap-1.5 text-sm">
+                <MapPin className="w-4 h-4 text-blue-400" />
+                <span>Shipping Destination</span>
+              </div>
+              <p className="font-bold text-[#E5E7EB]">{order.customer.fullName}</p>
+              <p className="text-[#9CA3AF]">{order.customer.addressLine}</p>
+              {order.customer.landmark && (
+                <p className="text-[#6B7280]">Landmark: {order.customer.landmark}</p>
+              )}
+              <p className="font-semibold text-[#E5E7EB]">
+                {order.customer.city}, {order.customer.province}
+              </p>
+              <p className="text-[#9CA3AF] flex items-center gap-1 pt-1">
+                <Phone className="w-3.5 h-3.5 text-blue-400" />
+                <span>{order.customer.phone}</span>
+              </p>
+            </div>
+
+            <div className="space-y-2 bg-[#0B0D10] p-4 rounded-xl border border-[#1A1D23]">
+              <div className="font-bold text-white flex items-center gap-1.5 text-sm">
+                <Truck className="w-4 h-4 text-blue-400" />
+                <span>Payment &amp; Dispatch</span>
+              </div>
+              <p className="text-[#9CA3AF]">
+                Payment Method: <strong className="text-white">Cash on Delivery (COD)</strong>
+              </p>
+              <p className="text-[#9CA3AF]">
+                Payment Status: <span className="text-amber-400 font-bold">{order.paymentStatus}</span>
+              </p>
+              <p className="text-[#9CA3AF]">
+                Estimated Delivery: <strong className="text-white">2–4 Working Days</strong>
+              </p>
+              <div className="pt-2 flex items-center gap-1.5 text-emerald-400 font-semibold">
+                <ShieldCheck className="w-4 h-4 shrink-0" />
+                <span>Official M.A. Group Warranty Included</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Ordered Items */}
+          <div className="space-y-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-[#9CA3AF]">
+              Ordered Items ({order.items.length})
+            </h3>
+            <div className="divide-y divide-[#1A1D23] border border-[#1A1D23] rounded-xl overflow-hidden">
+              {order.items.map((item, index) => (
+                <div key={index} className="p-3.5 flex items-center gap-3 bg-[#0B0D10]">
+                  <img
+                    src={item.productImage}
+                    alt={item.productName}
+                    className="w-12 h-12 rounded-lg object-cover bg-[#111318] border border-[#1A1D23] shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-xs font-bold text-white truncate">{item.productName}</h4>
+                    <span className="text-[11px] text-[#9CA3AF]">
+                      SKU: {item.sku} &middot; Qty: {item.quantity} &times; Rs. {item.price.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="text-xs font-black text-white">
+                    Rs. {item.total.toLocaleString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Totals */}
+          <div className="border-t border-[#1A1D23] pt-4 space-y-2 text-xs">
+            <div className="flex justify-between text-[#9CA3AF]">
+              <span>Subtotal</span>
+              <span className="font-semibold text-white">Rs. {order.subtotal.toLocaleString()}</span>
+            </div>
+            {order.discount > 0 && (
+              <div className="flex justify-between text-emerald-400">
+                <span>Discount</span>
+                <span className="font-bold">- Rs. {order.discount.toLocaleString()}</span>
+              </div>
+            )}
+            <div className="flex justify-between text-[#9CA3AF]">
+              <span>Delivery Charges</span>
+              <span className="font-semibold text-white">
+                {order.shippingFee === 0 ? 'FREE' : `Rs. ${order.shippingFee.toLocaleString()}`}
+              </span>
+            </div>
+            <div className="flex justify-between text-base font-black text-white pt-2 border-t border-[#1A1D23]">
+              <span>Total Cash on Delivery</span>
+              <span className="text-blue-400">Rs. {order.grandTotal.toLocaleString()}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <button
+            onClick={() => navigate('track-order')}
+            className="flex items-center gap-2 px-5 py-3 rounded-xl bg-[#111318] border border-[#2B2F38] hover:border-blue-500/40 text-xs font-bold text-white cursor-pointer transition-colors"
+          >
+            <Truck className="w-4 h-4 text-blue-400" />
+            <span>Track Order Status</span>
+          </button>
+
+          <button
+            onClick={() => navigate('shop')}
+            className="flex items-center gap-2 px-6 py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black uppercase tracking-wider cursor-pointer transition-colors"
+          >
+            <ShoppingBag className="w-4 h-4" />
+            <span>Continue Shopping</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
     </div>
   );
 };

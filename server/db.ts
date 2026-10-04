@@ -1120,6 +1120,13 @@ class DatabaseService {
     return this.data.categories;
   }
 
+  public syncCategories(categories: Category[]): void {
+    if (Array.isArray(categories) && categories.length > 0) {
+      this.data.categories = categories;
+      this.saveToFile(this.data);
+    }
+  }
+
   public getCategoryById(id: string): Category | undefined {
     return this.data.categories.find((c) => c.id === id || c.slug === id);
   }
@@ -1172,6 +1179,13 @@ class DatabaseService {
   // --- Orders ---
   public getOrders(): Order[] {
     return this.data.orders;
+  }
+
+  public syncOrders(orders: Order[]): void {
+    if (Array.isArray(orders)) {
+      this.data.orders = orders;
+      this.saveToFile(this.data);
+    }
   }
 
   public getOrderById(id: string): Order | undefined {

@@ -1,163 +1,143 @@
--- ==============================================================================
--- M.A. GROUP OF COMPANIES - SUPABASE PRODUCTS TABLE & STORAGE SETUP
--- Run this in your Supabase Dashboard -> SQL Editor
--- ==============================================================================
+-- ============================================================================
+-- M.A. GROUP OF COMPANIES - SUPABASE DATABASE & STORAGE SCHEMA
+-- Run this SQL in your Supabase Project -> SQL Editor
+-- ============================================================================
 
--- 1. Create the 'products' table
-CREATE TABLE IF NOT EXISTS public.products (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  description TEXT,
-  price NUMERIC NOT NULL DEFAULT 0,
-  category TEXT NOT NULL DEFAULT 'General',
-  image_url TEXT,
-  stock INTEGER NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  
-  -- Extended ecommerce fields
-  slug TEXT,
-  sku TEXT,
-  brand TEXT,
-  category_id TEXT,
-  category_name TEXT,
-  subcategory_id TEXT,
-  subcategory_name TEXT,
-  sale_price NUMERIC,
-  images TEXT[] DEFAULT ARRAY[]::TEXT[],
-  features TEXT[] DEFAULT ARRAY[]::TEXT[],
-  specifications JSONB DEFAULT '[]'::JSONB,
-  warranty TEXT,
-  tags TEXT[] DEFAULT ARRAY[]::TEXT[],
-  status TEXT DEFAULT 'active',
-  rating NUMERIC DEFAULT 5.0,
-  review_count INTEGER DEFAULT 1,
-  is_featured BOOLEAN DEFAULT FALSE,
-  is_bestseller BOOLEAN DEFAULT FALSE,
-  is_new_arrival BOOLEAN DEFAULT FALSE,
-  is_deal BOOLEAN DEFAULT FALSE,
-  data JSONB
+-- 1. PRODUCTS TABLE
+create table if not exists public.products (
+  id text primary key,
+  name text not null,
+  slug text,
+  sku text,
+  brand text,
+  category text not null default 'General',
+  category_id text,
+  price numeric not null default 0,
+  discount_price numeric,
+  stock integer not null default 0,
+  description text default '',
+  short_description text default '',
+  image_url text default '',
+  images jsonb default '[]'::jsonb,
+  specifications jsonb default '[]'::jsonb,
+  features jsonb default '[]'::jsonb,
+  warranty text default '',
+  is_active boolean default true,
+  featured boolean default false,
+  is_featured boolean default false,
+  is_best_seller boolean default false,
+  status text default 'active',
+  data jsonb,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
 );
 
--- 2. Create index on category, slug, and created_at
-CREATE INDEX IF NOT EXISTS idx_products_category ON public.products (category);
-CREATE INDEX IF NOT EXISTS idx_products_slug ON public.products (slug);
-CREATE INDEX IF NOT EXISTS idx_products_created_at ON public.products (created_at DESC);
-
--- 3. Enable Row Level Security (RLS)
-ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
-
--- Allow public read access to products
-DROP POLICY IF EXISTS "Public can view products" ON public.products;
-CREATE POLICY "Public can view products"
-  ON public.products
-  FOR SELECT
-  TO anon, authenticated
-  USING (true);
-
--- Allow backend functions / admin to insert, update, and delete products
-DROP POLICY IF EXISTS "Admin and Service Role manage products" ON public.products;
-CREATE POLICY "Admin and Service Role manage products"
-  ON public.products
-  FOR ALL
-  TO anon, authenticated, service_role
-  USING (true)
-  WITH CHECK (true);
-
--- 4. Create Public Storage Bucket for Product Images
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('product-images', 'product-images', true)
-ON CONFLICT (id) DO UPDATE SET public = true;
-
--- Storage policies for image uploads
-DROP POLICY IF EXISTS "Public can view product images" ON storage.objects;
-CREATE POLICY "Public can view product images"
-  ON storage.objects
-  FOR SELECT
-  TO anon, authenticated
-  USING (bucket_id = 'product-images');
-
-DROP POLICY IF EXISTS "Allow product image uploads" ON storage.objects;
-CREATE POLICY "Allow product image uploads"
-  ON storage.objects
-  FOR INSERT
-  TO anon, authenticated, service_role
-  WITH CHECK (bucket_id = 'product-images');
-
-DROP POLICY IF EXISTS "Allow product image updates" ON storage.objects;
-CREATE POLICY "Allow product image updates"
-  ON storage.objects
-  FOR UPDATE
-  TO anon, authenticated, service_role
-  USING (bucket_id = 'product-images');
-
--- ==============================================================================
--- 5. Create 'categories' table
--- ==============================================================================
-CREATE TABLE IF NOT EXISTS public.categories (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  slug TEXT NOT NULL UNIQUE,
-  description TEXT,
-  image TEXT,
-  display_order INTEGER DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  data JSONB
+-- 2. CATEGORIES TABLE
+create table if not exists public.categories (
+  id text primary key,
+  name text not null,
+  slug text,
+  description text,
+  image_url text,
+  icon_name text default 'Zap',
+  display_order integer default 0,
+  is_active boolean default true,
+  subcategories jsonb default '[]'::jsonb,
+  data jsonb,
+  created_at timestamptz default now()
 );
 
-ALTER TABLE public.categories ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "Public can view categories" ON public.categories;
-CREATE POLICY "Public can view categories"
-  ON public.categories
-  FOR SELECT
-  TO anon, authenticated
-  USING (true);
-
-DROP POLICY IF EXISTS "Admin and Service Role manage categories" ON public.categories;
-CREATE POLICY "Admin and Service Role manage categories"
-  ON public.categories
-  FOR ALL
-  TO anon, authenticated, service_role
-  USING (true)
-  WITH CHECK (true);
-
--- ==============================================================================
--- 6. Create 'orders' table
--- ==============================================================================
-CREATE TABLE IF NOT EXISTS public.orders (
-  id TEXT PRIMARY KEY,
-  order_number TEXT NOT NULL UNIQUE,
-  customer_name TEXT NOT NULL,
-  customer_phone TEXT NOT NULL,
-  customer_city TEXT NOT NULL,
-  grand_total NUMERIC NOT NULL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'Pending Verification',
-  payment_method TEXT NOT NULL DEFAULT 'Cash on Delivery (COD)',
-  payment_status TEXT NOT NULL DEFAULT 'Pending (COD on Delivery)',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  data JSONB
+-- 3. ORDERS TABLE (Cash on Delivery)
+create table if not exists public.orders (
+  id text primary key,
+  order_number text,
+  customer_name text not null,
+  phone text not null,
+  whatsapp text,
+  email text,
+  city text,
+  province text,
+  address text not null,
+  landmark text,
+  products jsonb not null default '[]'::jsonb,
+  items jsonb default '[]'::jsonb,
+  subtotal numeric default 0,
+  discount numeric default 0,
+  shipping_fee numeric default 0,
+  total_amount numeric not null default 0,
+  total_price numeric default 0,
+  payment_method text default 'COD',
+  payment_status text default 'COD Pending',
+  order_status text default 'Pending',
+  status text default 'Pending',
+  notes text,
+  tracking_number text,
+  courier_name text,
+  timeline jsonb default '[]'::jsonb,
+  data jsonb,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_orders_number ON public.orders (order_number);
-CREATE INDEX IF NOT EXISTS idx_orders_created_at ON public.orders (created_at DESC);
+-- 4. STORE SETTINGS & RECEIPT LOGO TABLE
+create table if not exists public.store_settings (
+  id text primary key default 'default',
+  data jsonb not null default '{}'::jsonb,
+  updated_at timestamptz default now()
+);
 
-ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+-- 5. SECURITY SETTINGS TABLE
+create table if not exists public.security_settings (
+  id text primary key default 'default',
+  data jsonb not null default '{}'::jsonb,
+  updated_at timestamptz default now()
+);
 
-DROP POLICY IF EXISTS "Public and Admin can view orders" ON public.orders;
-CREATE POLICY "Public and Admin can view orders"
-  ON public.orders
-  FOR SELECT
-  TO anon, authenticated, service_role
-  USING (true);
+-- 6. ROW LEVEL SECURITY (RLS) POLICIES
+-- Note: Server-side Admin operations use SUPABASE_SERVICE_ROLE_KEY which bypasses RLS,
+-- while public anon browser requests are strictly restricted by these policies:
+alter table public.products enable row level security;
+alter table public.categories enable row level security;
+alter table public.orders enable row level security;
+alter table public.store_settings enable row level security;
+alter table public.security_settings enable row level security;
 
-DROP POLICY IF EXISTS "Admin and Service Role manage orders" ON public.orders;
-CREATE POLICY "Admin and Service Role manage orders"
-  ON public.orders
-  FOR ALL
-  TO anon, authenticated, service_role
-  USING (true)
-  WITH CHECK (true);
+-- Public customers can read products & categories
+drop policy if exists "Public can view products" on public.products;
+create policy "Public can view products" on public.products for select using (true);
 
+drop policy if exists "Public can view categories" on public.categories;
+create policy "Public can view categories" on public.categories for select using (true);
+
+-- Public customers can create orders
+drop policy if exists "Customers can create orders" on public.orders;
+create policy "Customers can create orders" on public.orders for insert with check (true);
+
+-- Public can read store_settings
+drop policy if exists "Public can view store settings" on public.store_settings;
+create policy "Public can view store settings" on public.store_settings for select using (true);
+
+-- 7. SUPABASE STORAGE BUCKET FOR PRODUCT, CATEGORY & RECEIPT LOGO IMAGES
+insert into storage.buckets (id, name, public)
+values ('product-images', 'product-images', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists "Public Access to Product Images" on storage.objects;
+create policy "Public Access to Product Images"
+on storage.objects for select
+using ( bucket_id = 'product-images' );
+
+drop policy if exists "Allow Image Uploads to Product Images" on storage.objects;
+create policy "Allow Image Uploads to Product Images"
+on storage.objects for insert
+with check ( bucket_id = 'product-images' );
+
+drop policy if exists "Allow Image Updates in Product Images" on storage.objects;
+create policy "Allow Image Updates in Product Images"
+on storage.objects for update
+using ( bucket_id = 'product-images' );
+
+drop policy if exists "Allow Image Deletes from Product Images" on storage.objects;
+create policy "Allow Image Deletes from Product Images"
+on storage.objects for delete
+using ( bucket_id = 'product-images' );

@@ -138,6 +138,11 @@ export const AdminDashboard: React.FC = () => {
   const [newSubcategoryName, setNewSubcategoryName] = useState('');
   const categoryFileInputRef = useRef<HTMLInputElement>(null);
 
+  // Receipt Logo Upload State
+  const receiptLogoInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingReceiptLogo, setIsUploadingReceiptLogo] = useState(false);
+  const [receiptLogoUploadError, setReceiptLogoUploadError] = useState<string | null>(null);
+
   // Banner Modal
   const [editingBanner, setEditingBanner] = useState<Partial<HeroBanner> | null>(null);
   const [isBannerModalOpen, setIsBannerModalOpen] = useState(false);
@@ -920,23 +925,25 @@ export const AdminDashboard: React.FC = () => {
     courierName?: string
   ) => {
     try {
-      const res = await fetch(`/api/orders/${orderId}/status`, {
+      const res = await adminFetch(`/api/orders/${orderId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status, paymentStatus, trackingNumber, courierName }),
       });
       const updated = await safeJsonResponse(res, null);
-      if (updated && !updated.error) {
+      if (res.ok && updated && !updated.error) {
         setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
         if (selectedOrder && selectedOrder.id === orderId) {
           setSelectedOrder(updated);
         }
+        await refreshProducts();
+        await loadAdminData();
         showToast(`Order status updated to "${status}".`, 'success');
       } else {
-        showToast('Failed to update status.', 'error');
+        showToast(updated?.error || 'Failed to update status.', 'error');
       }
-    } catch {
-      showToast('Failed to update status.', 'error');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to update status.', 'error');
     }
   };
 
@@ -946,7 +953,7 @@ export const AdminDashboard: React.FC = () => {
     setAiLoading(true);
     setAiResult('');
     try {
-      const res = await fetch('/api/ai/admin-copy', {
+      const res = await adminFetch('/api/ai/admin-copy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: aiPrompt, type: aiType }),
@@ -2838,6 +2845,166 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </div>
 
+            {/* Section 1B: Official Receipt & Invoice Logo (Printed on A4, 80mm & 58mm POS Receipts) */}
+            <div className="bg-neutral-900 p-6 rounded-2xl border border-neutral-800 space-y-4 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-bold text-amber-400 uppercase tracking-wider flex items-center gap-2">
+                    <Printer className="w-4 h-4" />
+                    <span>Receipt &amp; Invoice Logo Configuration</span>
+                  </h3>
+                  <p className="text-[11px] text-neutral-400 mt-0.5">
+                    Upload your official company logo to print automatically on all Admin A4, 80mm POS, and 58mm thermal receipts.
+                  </p>
+                </div>
+                {isUploadingReceiptLogo && (
+                  <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[11px] font-semibold animate-pulse">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Uploading Logo to Supabase...</span>
+                  </div>
+                )}
+              </div>
+
+              <input
+                ref={receiptLogoInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/jpg"
+                disabled={isUploadingReceiptLogo}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  if (!file.type.match(/^image\/(jpeg|png|webp|jpg)$/i)) {
+                    const err = 'Please select a valid image file (JPG, PNG, or WEBP).';
+                    setReceiptLogoUploadError(err);
+                    showToast(err, 'error');
+                    if (receiptLogoInputRef.current) receiptLogoInputRef.current.value = '';
+                    return;
+                  }
+                  if (file.size > 8 * 1024 * 1024) {
+                    const err = 'Logo file size must be less than 8MB.';
+                    setReceiptLogoUploadError(err);
+                    showToast(err, 'error');
+                    if (receiptLogoInputRef.current) receiptLogoInputRef.current.value = '';
+                    return;
+                  }
+                  setIsUploadingReceiptLogo(true);
+                  setReceiptLogoUploadError(null);
+                  const reader = new FileReader();
+                  reader.onload = async () => {
+                    try {
+                      const base64Data = reader.result as string;
+                      const res = await adminFetch('/api/upload', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          filename: `receipt-logo-${file.name}`,
+                          fileData: base64Data,
+                          contentType: file.type || 'image/png',
+                        }),
+                      });
+                      const data = await safeJsonResponse(res, { success: false, error: 'Upload failed' });
+                      if (!res.ok || !data.success || !data.url) {
+                        throw new Error(data.error || 'Failed to upload logo to Supabase Storage');
+                      }
+                      const updatedSettings = { ...adminSettings, receiptLogoUrl: data.url };
+                      setAdminSettings(updatedSettings);
+                      // Save immediately to database
+                      const saveRes = await adminFetch('/api/settings', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(updatedSettings),
+                      });
+                      if (saveRes.ok) {
+                        await refreshSettings();
+                        showToast('Receipt logo uploaded & saved for printing!', 'success');
+                      } else {
+                        showToast('Logo uploaded. Click Save Settings to publish.', 'info');
+                      }
+                    } catch (err: any) {
+                      const errMsg = err.message || 'Failed to upload receipt logo';
+                      setReceiptLogoUploadError(errMsg);
+                      showToast(errMsg, 'error');
+                    } finally {
+                      setIsUploadingReceiptLogo(false);
+                      if (receiptLogoInputRef.current) receiptLogoInputRef.current.value = '';
+                    }
+                  };
+                  reader.readAsDataURL(file);
+                }}
+                className="hidden"
+              />
+
+              <div className="flex flex-col sm:flex-row items-center gap-4 p-4 rounded-xl bg-neutral-950 border border-neutral-800">
+                <div className="w-32 h-24 rounded-xl bg-white border border-neutral-700 flex items-center justify-center p-2 shrink-0 overflow-hidden">
+                  {adminSettings.receiptLogoUrl ? (
+                    <img
+                      src={adminSettings.receiptLogoUrl}
+                      alt="Receipt Logo Preview"
+                      className="max-h-full max-w-full object-contain"
+                    />
+                  ) : (
+                    <div className="text-center text-neutral-500 text-[10px] font-semibold">
+                      No Logo Uploaded
+                      <div className="text-[9px] text-neutral-400">(Text Header Only)</div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 space-y-2 w-full">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isUploadingReceiptLogo}
+                      onClick={() => receiptLogoInputRef.current?.click()}
+                      className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-50"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>{adminSettings.receiptLogoUrl ? 'Change Receipt Logo' : 'Upload Receipt Logo from Device'}</span>
+                    </button>
+                    {adminSettings.receiptLogoUrl && (
+                      <button
+                        type="button"
+                        disabled={isUploadingReceiptLogo}
+                        onClick={() => setAdminSettings({ ...adminSettings, receiptLogoUrl: '' })}
+                        className="px-3 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Remove Logo</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="space-y-1 pt-1">
+                    <label className="text-[11px] text-neutral-400 block">
+                      Or paste direct Logo Image URL:
+                    </label>
+                    <input
+                      type="text"
+                      value={adminSettings.receiptLogoUrl || ''}
+                      onChange={(e) => setAdminSettings({ ...adminSettings, receiptLogoUrl: e.target.value })}
+                      placeholder="https://... logo URL for printed receipts"
+                      className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-white font-mono text-[11px]"
+                    />
+                  </div>
+
+                  {receiptLogoUploadError && (
+                    <p className="text-rose-400 text-[11px]">{receiptLogoUploadError}</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-neutral-300">Printed Receipt Footer Thank-You Note</label>
+                <input
+                  type="text"
+                  value={adminSettings.receiptFooterNote || ''}
+                  onChange={(e) => setAdminSettings({ ...adminSettings, receiptFooterNote: e.target.value })}
+                  placeholder="e.g. THANK YOU FOR CHOOSING M.A. GROUP OF COMPANIES"
+                  className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-white"
+                />
+              </div>
+            </div>
+
             {/* Section 2: Helpline & Customer Contact Controls */}
             <div className="bg-neutral-900 p-6 rounded-2xl border border-neutral-800 space-y-4 text-xs">
               <h3 className="text-sm font-bold text-amber-400 uppercase tracking-wider">
@@ -3075,19 +3242,28 @@ export const AdminDashboard: React.FC = () => {
             <div className="flex items-center gap-4 pt-2">
               <button
                 onClick={async () => {
-                  await fetch('/api/settings', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(adminSettings),
-                  });
-                  await refreshSettings();
-                  showToast('All website settings saved and published live!', 'success');
+                  try {
+                    const res = await adminFetch('/api/settings', {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(adminSettings),
+                    });
+                    const data = await safeJsonResponse(res, null);
+                    if (!res.ok) {
+                      showToast(data?.error || 'Failed to save settings', 'error');
+                      return;
+                    }
+                    await refreshSettings();
+                    showToast('All website settings and receipt logo saved and published live!', 'success');
+                  } catch (err: any) {
+                    showToast(err?.message || 'Error saving settings', 'error');
+                  }
                 }}
                 className="bg-amber-500 hover:bg-amber-600 text-neutral-950 font-black text-sm px-8 py-3.5 rounded-xl cursor-pointer shadow-lg hover:shadow-amber-500/20 transition-all"
               >
                 SAVE &amp; PUBLISH ALL SETTINGS
               </button>
-              <span className="text-xs text-neutral-400">Updates take effect across the website instantly.</span>
+              <span className="text-xs text-neutral-400">Updates take effect across the website &amp; receipt printer instantly.</span>
             </div>
           </div>
         )}

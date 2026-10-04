@@ -35,7 +35,8 @@
         "products"
       ],
       "createdAt": "2026-09-30T12:24:59.857Z",
-      "updatedAt": "2026-09-30T12:24:59.857Z"
+      "updatedAt": "2026-09-30T12:24:59.857Z",
+      "costPrice": 18750
     },
     {
       "id": "prod-inverex-nitrox-6kw",
@@ -105,7 +106,8 @@
         "net-metering"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 258750
     },
     {
       "id": "prod-longi-550w-mono",
@@ -168,7 +170,8 @@
         "bifacial"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 28875
     },
     {
       "id": "prod-inverex-lithium-powerwall-48v",
@@ -226,7 +229,8 @@
         "powerwall"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 270000
     },
     {
       "id": "prod-pak-cables-70-0076",
@@ -284,7 +288,8 @@
         "electrical"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 19875
     },
     {
       "id": "prod-schneider-acti9-breaker",
@@ -341,7 +346,8 @@
         "electrical"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 3713
     },
     {
       "id": "prod-designer-switch-plate-gold",
@@ -393,7 +399,8 @@
         "modular"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 5100
     },
     {
       "id": "prod-sonex-luxury-tall-basin-mixer",
@@ -452,7 +459,8 @@
         "brass"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 11625
     },
     {
       "id": "prod-master-rain-shower-set",
@@ -505,7 +513,8 @@
         "master"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 28500
     },
     {
       "id": "prod-bosch-gsb-18v-drill",
@@ -564,7 +573,8 @@
         "cordless"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 39000
     },
     {
       "id": "prod-smart-biometric-door-lock",
@@ -617,7 +627,8 @@
         "fingerprint"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 21375
     },
     {
       "id": "prod-corona-3-burner-hob",
@@ -676,7 +687,8 @@
         "brass-burner"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 27000
     },
     {
       "id": "prod-corona-90cm-kitchen-hood",
@@ -734,7 +746,8 @@
         "range-hood"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 37125
     },
     {
       "id": "prod-crown-ev-volt-72v",
@@ -796,7 +809,8 @@
         "green-mobility"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 183750
     },
     {
       "id": "prod-ev-fast-charger-72v",
@@ -846,7 +860,8 @@
         "accessories"
       ],
       "createdAt": "2026-09-28T09:23:34.475Z",
-      "updatedAt": "2026-09-28T09:23:34.475Z"
+      "updatedAt": "2026-09-28T09:23:34.475Z",
+      "costPrice": 13875
     }
   ],
   "categories": [
@@ -1360,10 +1375,112 @@
     "freeShippingThreshold": 5000,
     "taxRate": 0,
     "aiAssistantEnabled": true,
-    "aiWelcomeMessage": "Welcome to M.A. GROUP OF COMPANIES! I am your Smart Assistant. Ask me anything about solar sizing, electrical cable ratings, sanitary fixtures, hobs & hoods, or tracking your order."
+    "aiWelcomeMessage": "Welcome to M.A. GROUP OF COMPANIES! I am your Smart Assistant. Ask me anything about solar sizing, electrical cable ratings, sanitary fixtures, hobs & hoods, or tracking your order.",
+    "receiptLogoUrl": "",
+    "receiptFooterNote": ""
   },
   "inquiries": [],
   "auditLogs": [
+    {
+      "id": "log-1791107275647-ewbg",
+      "action": "DELETE_CATEGORY",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Deleted category: Test Industrial Category (ID: cat-1791107270586)",
+      "timestamp": "2026-10-04T09:47:55.647Z"
+    },
+    {
+      "id": "log-1791107275310-9ayj",
+      "action": "DELETE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Deleted product: Test 15kW Hybrid Solar Inverter (ID: prod-1791107271081)",
+      "timestamp": "2026-10-04T09:47:55.310Z"
+    },
+    {
+      "id": "log-1791107275219-da9z",
+      "action": "DELETE_ORDER",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Deleted order: MAG-8662 (ID: ord-1791107243754)",
+      "timestamp": "2026-10-04T09:47:55.219Z"
+    },
+    {
+      "id": "log-1791107275126-j24u",
+      "action": "DELETE_ORDER",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Deleted order: MAG-3868 (ID: ord-1791107272661)",
+      "timestamp": "2026-10-04T09:47:55.126Z"
+    },
+    {
+      "id": "log-1791107274762-hv3a",
+      "action": "UPDATE_SETTINGS",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Updated store configurations",
+      "timestamp": "2026-10-04T09:47:54.762Z"
+    },
+    {
+      "id": "log-1791107274670-firo",
+      "action": "UPDATE_SETTINGS",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Updated store configurations",
+      "timestamp": "2026-10-04T09:47:54.670Z"
+    },
+    {
+      "id": "log-1791107274394-izzl",
+      "action": "UPDATE_ORDER_STATUS",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Order MAG-3868 status changed to Shipped",
+      "timestamp": "2026-10-04T09:47:54.394Z"
+    },
+    {
+      "id": "log-1791107273378-r3mf",
+      "action": "NEW_ORDER_COD",
+      "performedBy": "Ali Khan",
+      "details": "New order MAG-3868 placed for Rs. 550,000 COD.",
+      "timestamp": "2026-10-04T09:47:53.378Z"
+    },
+    {
+      "id": "log-1791107272290-pta1",
+      "action": "UPDATE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Updated product: prod-1791107271081",
+      "timestamp": "2026-10-04T09:47:52.290Z"
+    },
+    {
+      "id": "log-1791107271577-hxcs",
+      "action": "CREATE_PRODUCT",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Created product (store): Test 15kW Hybrid Solar Inverter (SKU-271081)",
+      "timestamp": "2026-10-04T09:47:51.577Z"
+    },
+    {
+      "id": "log-1791107271073-9yd9",
+      "action": "CREATE_CATEGORY",
+      "performedBy": "M.A. Master Administrator (Super Admin)",
+      "details": "Created category: Test Industrial Category",
+      "timestamp": "2026-10-04T09:47:51.073Z"
+    },
+    {
+      "id": "log-1791107270197-q6pw",
+      "action": "ADMIN_LOGIN_SUCCESS",
+      "performedBy": "Superadmin",
+      "details": "Authenticated via Master Secret with full access",
+      "timestamp": "2026-10-04T09:47:50.197Z",
+      "ipAddress": "::ffff:127.0.0.1"
+    },
+    {
+      "id": "log-1791107244226-p7x8",
+      "action": "NEW_ORDER_COD",
+      "performedBy": "Ali Khan",
+      "details": "New order MAG-8662 placed for Rs. 550,000 COD.",
+      "timestamp": "2026-10-04T09:47:24.226Z"
+    },
+    {
+      "id": "log-1791107242239-wybj",
+      "action": "ADMIN_LOGIN_FAILED",
+      "performedBy": "MasterSecretAttempt",
+      "details": "Invalid administrator credentials supplied",
+      "timestamp": "2026-10-04T09:47:22.239Z",
+      "ipAddress": "::ffff:127.0.0.1"
+    },
     {
       "id": "log-1790772142988-zmvn",
       "action": "DELETE_PRODUCT",
@@ -1743,5 +1860,232 @@
         "createdAt": "2026-09-28T10:22:13.085Z"
       }
     ]
-  }
+  },
+  "inventoryLedger": [
+    {
+      "id": "ledg-1791107272678-l5ci",
+      "productId": "prod-1791107271081",
+      "productName": "Test 15kW Hybrid Solar Inverter",
+      "sku": "SKU-271081",
+      "change": -2,
+      "previousStock": 8,
+      "newStock": 6,
+      "reason": "Order Placed",
+      "referenceId": "MAG-3868",
+      "performedBy": "Ali Khan",
+      "timestamp": "2026-10-04T09:47:52.678Z",
+      "notes": "Deducted 2 units for COD order MAG-3868"
+    },
+    {
+      "id": "ledg-prod-1790771099857",
+      "productId": "prod-1790771099857",
+      "productName": "pipe",
+      "sku": "MAG-8613",
+      "change": 10,
+      "previousStock": 0,
+      "newStock": 10,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-30T12:24:59.857Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-inverex-nitrox-6kw",
+      "productId": "prod-inverex-nitrox-6kw",
+      "productName": "Inverex Nitrox 6kW Hybrid Solar Inverter (IP65 Dual MPPT)",
+      "sku": "INV-NX-6KW",
+      "change": 14,
+      "previousStock": 0,
+      "newStock": 14,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-longi-550w-mono",
+      "productId": "prod-longi-550w-mono",
+      "productName": "Longi Hi-MO 5 550W Tier-1 Mono PERC Bifacial Solar Panel",
+      "sku": "LGI-550W-BIF",
+      "change": 120,
+      "previousStock": 0,
+      "newStock": 120,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-inverex-lithium-powerwall-48v",
+      "productId": "prod-inverex-lithium-powerwall-48v",
+      "productName": "Inverex PowerWall 48V 100Ah (5.12kWh) LiFePO4 Lithium Battery",
+      "sku": "INV-PW-48100",
+      "change": 9,
+      "previousStock": 0,
+      "newStock": 9,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-pak-cables-70-0076",
+      "productId": "prod-pak-cables-70-0076",
+      "productName": "Pakistan Cables 70/0.0076 Single Core Pure Copper Cable (90m Coil)",
+      "sku": "PC-700076-RED",
+      "change": 45,
+      "previousStock": 0,
+      "newStock": 45,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-schneider-acti9-breaker",
+      "productId": "prod-schneider-acti9-breaker",
+      "productName": "Schneider Electric Acti9 32A Double Pole (DP) MCB Miniature Circuit Breaker",
+      "sku": "SCH-MCB-32DP",
+      "change": 65,
+      "previousStock": 0,
+      "newStock": 65,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-designer-switch-plate-gold",
+      "productId": "prod-designer-switch-plate-gold",
+      "productName": "M.A. Signature Royal Gold Brushed 8-Gang Modular Switch Plate Set",
+      "sku": "MA-SW-8G-GLD",
+      "change": 80,
+      "previousStock": 0,
+      "newStock": 80,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-sonex-luxury-tall-basin-mixer",
+      "productId": "prod-sonex-luxury-tall-basin-mixer",
+      "productName": "Sonex Prime Chrome High-Neck Luxury Brass Basin Mixer",
+      "sku": "SNX-BM-CHR",
+      "change": 22,
+      "previousStock": 0,
+      "newStock": 22,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-master-rain-shower-set",
+      "productId": "prod-master-rain-shower-set",
+      "productName": "Master Luxury Matte Black Thermostatic Concealed Rain Shower Set",
+      "sku": "MST-RS-BLK",
+      "change": 16,
+      "previousStock": 0,
+      "newStock": 16,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-bosch-gsb-18v-drill",
+      "productId": "prod-bosch-gsb-18v-drill",
+      "productName": "Bosch GSB 18V-50 Professional Brushless Cordless Impact Drill Kit",
+      "sku": "BSH-GSB-18V",
+      "change": 18,
+      "previousStock": 0,
+      "newStock": 18,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-smart-biometric-door-lock",
+      "productId": "prod-smart-biometric-door-lock",
+      "productName": "M.A. Guardian Elite Biometric Fingerprint & RFID Smart Door Lock",
+      "sku": "MA-LCK-BIO1",
+      "change": 25,
+      "previousStock": 0,
+      "newStock": 25,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-corona-3-burner-hob",
+      "productId": "prod-corona-3-burner-hob",
+      "productName": "Corona Imperial 3-Burner Tempered Glass Built-in Gas Hob (Heavy Brass Burners)",
+      "sku": "CRN-HOB-3B",
+      "change": 19,
+      "previousStock": 0,
+      "newStock": 19,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-corona-90cm-kitchen-hood",
+      "productId": "prod-corona-90cm-kitchen-hood",
+      "productName": "Corona Cyclone 90cm Auto-Clean Touch-Control Kitchen Hood",
+      "sku": "CRN-HD-90C",
+      "change": 12,
+      "previousStock": 0,
+      "newStock": 12,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-crown-ev-volt-72v",
+      "productId": "prod-crown-ev-volt-72v",
+      "productName": "Crown EV Volt 72V 35Ah Lithium High-Range Electric Commuter Motorbike",
+      "sku": "CRW-EV-V72",
+      "change": 6,
+      "previousStock": 0,
+      "newStock": 6,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    },
+    {
+      "id": "ledg-prod-ev-fast-charger-72v",
+      "productId": "prod-ev-fast-charger-72v",
+      "productName": "Smart 72V 10A Aluminum Shell Ultra-Fast EV Charger (Fan-Cooled)",
+      "sku": "EV-CHG-7210",
+      "change": 28,
+      "previousStock": 0,
+      "newStock": 28,
+      "reason": "Initial Stock",
+      "referenceId": "OPENING-STOCK",
+      "performedBy": "Warehouse Inventory Team",
+      "timestamp": "2026-09-28T09:23:34.475Z",
+      "notes": "Opening physical stock audit verified at Lahore central warehouse."
+    }
+  ],
+  "customerNotes": {}
 }

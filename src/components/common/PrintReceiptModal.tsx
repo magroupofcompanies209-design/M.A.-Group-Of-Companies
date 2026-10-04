@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { Order } from '../../types/index.ts';
 import { Printer, X, FileText, CheckCircle2 } from 'lucide-react';
+import { useStore } from '../../context/StoreContext';
 
 export type ReceiptFormat = 'a4' | '80mm' | '58mm';
 
@@ -15,7 +16,16 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
   onClose,
   initialFormat = 'a4',
 }) => {
+  const { settings } = useStore();
   const [format, setFormat] = useState<ReceiptFormat>(initialFormat);
+
+  const storeName = settings?.storeName || 'M.A. GROUP OF COMPANIES';
+  const tagline = settings?.tagline || 'PREMIUM ELECTRICAL, SOLAR & HARDWARE EQUIPMENT';
+  const logoUrl = settings?.receiptLogoUrl || '';
+  const phoneDisplay = settings?.contactPhone || '+92 300 1234567';
+  const emailDisplay = settings?.contactEmail || 'support@magroup.pk';
+  const addressDisplay = settings?.headOfficeAddress || 'Main Ferozepur Road / Showroom Hub, Lahore, Pakistan';
+  const footerNote = settings?.receiptFooterNote || 'THANK YOU FOR CHOOSING M.A. GROUP OF COMPANIES';
 
   const handlePrint = () => {
     window.print();
@@ -121,17 +131,26 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
             <div className="print-friendly receipt-a4 bg-white text-black p-8 rounded-lg shadow-lg border border-neutral-200">
               {/* Header */}
               <div className="flex justify-between items-start border-b-2 border-black pb-4 mb-6">
-                <div>
-                  <h1 className="text-2xl font-black tracking-tight uppercase">M.A. GROUP OF COMPANIES</h1>
-                  <p className="text-xs font-semibold text-neutral-700 tracking-wider">
-                    PREMIUM ELECTRICAL, SOLAR & HARDWARE EQUIPMENT
-                  </p>
-                  <p className="text-xs text-neutral-600 mt-1">
-                    Head Office: Main Ferozepur Road / Showroom Hub, Lahore, Pakistan
-                  </p>
-                  <p className="text-xs text-neutral-600">
-                    Helpline: +92 300 1234567 | WhatsApp: +92 321 7654321 | support@magroup.pk
-                  </p>
+                <div className="flex items-start gap-4">
+                  {logoUrl && (
+                    <img
+                      src={logoUrl}
+                      alt={storeName}
+                      className="max-h-16 max-w-[140px] object-contain shrink-0"
+                    />
+                  )}
+                  <div>
+                    <h1 className="text-2xl font-black tracking-tight uppercase">{storeName}</h1>
+                    <p className="text-xs font-semibold text-neutral-700 tracking-wider uppercase">
+                      {tagline}
+                    </p>
+                    <p className="text-xs text-neutral-600 mt-1">
+                      Head Office: {addressDisplay}
+                    </p>
+                    <p className="text-xs text-neutral-600">
+                      Helpline: {phoneDisplay} | {emailDisplay}
+                    </p>
+                  </div>
                 </div>
                 <div className="text-right">
                   <div className="inline-block px-3 py-1 bg-black text-white font-mono font-bold text-xs uppercase mb-1">
@@ -241,7 +260,7 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                 <p>2. Solar panels and inverters include official manufacturer linear warranty backed by M.A. Group of Companies.</p>
                 <p>3. Electrical cables and switches are certified pure copper standards. For claim queries contact helpline.</p>
                 <div className="text-center pt-4 font-mono font-bold text-xs text-neutral-500">
-                  *** THANK YOU FOR CHOOSING M.A. GROUP OF COMPANIES ***
+                  *** {footerNote.toUpperCase()} ***
                 </div>
               </div>
             </div>
@@ -253,10 +272,17 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
           {format === '80mm' && (
             <div className="print-friendly receipt-80mm bg-white text-black p-4 rounded shadow-lg border border-neutral-300 text-xs">
               <div className="text-center mb-2">
-                <div className="font-black text-base uppercase tracking-tight">M.A. GROUP OF COMPANIES</div>
-                <div className="text-[10px] uppercase font-bold tracking-wider">Electrical, Solar & Hardware</div>
-                <div className="text-[10px]">Lahore Showroom Hub, Pakistan</div>
-                <div className="text-[10px]">Ph: 0300-1234567 | 0321-7654321</div>
+                {logoUrl && (
+                  <img
+                    src={logoUrl}
+                    alt={storeName}
+                    className="max-h-12 max-w-[120px] object-contain mx-auto mb-1.5"
+                  />
+                )}
+                <div className="font-black text-base uppercase tracking-tight">{storeName}</div>
+                <div className="text-[10px] uppercase font-bold tracking-wider">{tagline}</div>
+                <div className="text-[10px]">{addressDisplay}</div>
+                <div className="text-[10px]">Ph: {phoneDisplay}</div>
               </div>
 
               <div className="print-divider-double"></div>
@@ -353,9 +379,16 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
           {format === '58mm' && (
             <div className="print-friendly receipt-58mm bg-white text-black p-2.5 rounded shadow-lg border border-neutral-300 text-[10px] leading-tight font-mono">
               <div className="text-center mb-1.5 font-sans">
-                <div className="font-black text-xs uppercase tracking-tight">M.A. GROUP</div>
-                <div className="text-[8px] uppercase font-bold">Electrical & Solar</div>
-                <div className="text-[8px]">Ph: 0300-1234567</div>
+                {logoUrl && (
+                  <img
+                    src={logoUrl}
+                    alt={storeName}
+                    className="max-h-10 max-w-[90px] object-contain mx-auto mb-1"
+                  />
+                )}
+                <div className="font-black text-xs uppercase tracking-tight">{storeName}</div>
+                <div className="text-[8px] uppercase font-bold">{tagline}</div>
+                <div className="text-[8px]">Ph: {phoneDisplay}</div>
               </div>
 
               <div className="print-divider-double"></div>

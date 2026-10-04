@@ -63,6 +63,7 @@ export const CheckoutPage: React.FC = () => {
     clearCart,
     navigate,
     showToast,
+    refreshProducts,
   } = useStore();
 
   const [formData, setFormData] = useState({
@@ -161,6 +162,7 @@ export const CheckoutPage: React.FC = () => {
 
       // Success
       clearCart();
+      await refreshProducts();
       showToast(`Order ${data.orderNumber} placed successfully!`, 'success');
       navigate('order-success', { orderNumber: data.orderNumber });
     } catch (err: any) {
