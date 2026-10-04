@@ -11,10 +11,18 @@ import {
 export const ShopPage: React.FC = () => {
   const { products, categories, brands, routeParams } = useStore();
 
+  // Compute dynamic maximum price from products (minimum 500,000 PKR so high-price products are never hidden)
+  const maxCatalogPrice = useMemo(() => {
+    const highest = products.reduce((max, p) => Math.max(max, p.salePrice || p.price || 0), 0);
+    return Math.max(500000, Math.ceil(highest / 10000) * 10000);
+  }, [products]);
+
   // Search & Filter States
-  const [selectedCategory, setSelectedCategory] = useState<string>(routeParams.category || 'all');
+  const [selectedCategory, setSelectedCategory] = useState<string>(
+    routeParams.category || routeParams.slug || 'all'
+  );
   const [selectedBrand, setSelectedBrand] = useState<string>('all');
-  const [priceRange, setPriceRange] = useState<number>(400000);
+  const [priceRange, setPriceRange] = useState<number>(10000000);
   const [sortBy, setSortBy] = useState<string>('featured');
   const [onlyInStock, setOnlyInStock] = useState<boolean>(false);
   const [minRating, setMinRating] = useState<number>(0);
@@ -23,7 +31,9 @@ export const ShopPage: React.FC = () => {
 
   // Sync routeParams if URL changes
   useEffect(() => {
-    if (routeParams.category) setSelectedCategory(routeParams.category);
+    if (routeParams.category || routeParams.slug) {
+      setSelectedCategory(routeParams.category || routeParams.slug);
+    }
     if (routeParams.search) setLocalSearch(routeParams.search);
   }, [routeParams]);
 
@@ -31,7 +41,7 @@ export const ShopPage: React.FC = () => {
   const resetFilters = () => {
     setSelectedCategory('all');
     setSelectedBrand('all');
-    setPriceRange(400000);
+    setPriceRange(maxCatalogPrice);
     setSortBy('featured');
     setOnlyInStock(false);
     setMinRating(0);
@@ -41,7 +51,7 @@ export const ShopPage: React.FC = () => {
   const hasActiveFilters =
     selectedCategory !== 'all' ||
     selectedBrand !== 'all' ||
-    priceRange < 400000 ||
+    priceRange < maxCatalogPrice ||
     onlyInStock ||
     minRating > 0 ||
     localSearch.trim().length > 0;
@@ -51,17 +61,33 @@ export const ShopPage: React.FC = () => {
     return products
       .filter((p) => {
         // Status filter: only active products in customer storefront
-        if (p.status === 'archived' || p.status === 'inactive') return false;
+        if (p.status === 'archived' || p.status === 'inactive' || p.isArchived) return false;
 
-        // Category
-        if (selectedCategory !== 'all' && p.categoryId !== selectedCategory) return false;
+        // Category (match by ID, slug, or categoryName)
+        if (selectedCategory !== 'all') {
+          const selCatObj = categories.find(
+            (c) =>
+              c.id === selectedCategory ||
+              c.slug.toLowerCase() === selectedCategory.toLowerCase() ||
+              c.name.toLowerCase() === selectedCategory.toLowerCase()
+          );
+          const matchesCat =
+            p.categoryId === selectedCategory ||
+            (selCatObj &&
+              (p.categoryId === selCatObj.id ||
+                p.categoryId.toLowerCase() === selCatObj.slug.toLowerCase() ||
+                (p.categoryName && p.categoryName.toLowerCase() === selCatObj.name.toLowerCase()))) ||
+            (p.categoryName && p.categoryName.toLowerCase() === selectedCategory.toLowerCase());
+          if (!matchesCat) return false;
+        }
 
         // Brand
         if (selectedBrand !== 'all' && p.brand.toLowerCase() !== selectedBrand.toLowerCase()) return false;
 
         // Price
         const effectivePrice = p.salePrice || p.price;
-        if (effectivePrice > priceRange) return false;
+        if (effectivePrice > Math.max(priceRange, maxCatalogPrice)) return false;
+        if (priceRange < maxCatalogPrice && effectivePrice > priceRange) return false;
 
         // In Stock
         if (onlyInStock && p.stock <= 0) return false;
@@ -76,7 +102,7 @@ export const ShopPage: React.FC = () => {
             p.name.toLowerCase().includes(q) ||
             p.sku.toLowerCase().includes(q) ||
             p.brand.toLowerCase().includes(q) ||
-            p.categoryName.toLowerCase().includes(q) ||
+            (p.categoryName && p.categoryName.toLowerCase().includes(q)) ||
             (p.shortDescription && p.shortDescription.toLowerCase().includes(q));
           if (!match) return false;
         }
@@ -94,7 +120,7 @@ export const ShopPage: React.FC = () => {
         // default 'featured'
         return (b.isFeatured ? 1 : 0) - (a.isFeatured ? 1 : 0);
       });
-  }, [products, selectedCategory, selectedBrand, priceRange, onlyInStock, minRating, localSearch, sortBy]);
+  }, [products, categories, selectedCategory, selectedBrand, priceRange, maxCatalogPrice, onlyInStock, minRating, localSearch, sortBy]);
 
   return (
     <div className="bg-[#0B0D10] text-[#F8FAFC] py-8 sm:py-12 border-b border-[#1A1D23] min-h-screen">
@@ -191,23 +217,36 @@ export const ShopPage: React.FC = () => {
                   >
                     All Categories ({products.length})
                   </button>
-                  {categories.map((c) => {
-                    const count = products.filter((p) => p.categoryId === c.id).length;
-                    return (
-                      <button
-                        key={c.id}
-                        onClick={() => setSelectedCategory(c.id)}
-                        className={`w-full text-left px-2.5 py-1.5 rounded-lg transition-colors flex items-center justify-between cursor-pointer ${
-                          selectedCategory === c.id
-                            ? 'bg-[#2563EB] text-white font-bold'
-                            : 'text-[#E5E7EB] hover:bg-[#1A1D23] font-medium'
-                        }`}
-                      >
-                        <span className="truncate">{c.name}</span>
-                        <span className="text-[10px] opacity-70">({count})</span>
-                      </button>
-                    );
-                  })}
+                  {categories
+                    .filter((c) => c.isActive !== false)
+                    .map((c) => {
+                      const count = products.filter(
+                        (p) =>
+                          p.status !== 'archived' &&
+                          p.status !== 'inactive' &&
+                          !p.isArchived &&
+                          (p.categoryId === c.id ||
+                            (p.categoryName && p.categoryName.toLowerCase() === c.name.toLowerCase()))
+                      ).length;
+                      const isSel =
+                        selectedCategory === c.id ||
+                        selectedCategory.toLowerCase() === c.slug.toLowerCase() ||
+                        selectedCategory.toLowerCase() === c.name.toLowerCase();
+                      return (
+                        <button
+                          key={c.id}
+                          onClick={() => setSelectedCategory(c.id)}
+                          className={`w-full text-left px-2.5 py-1.5 rounded-lg transition-colors flex items-center justify-between cursor-pointer ${
+                            isSel
+                              ? 'bg-[#2563EB] text-white font-bold'
+                              : 'text-[#E5E7EB] hover:bg-[#1A1D23] font-medium'
+                          }`}
+                        >
+                          <span className="truncate">{c.name}</span>
+                          <span className="text-[10px] opacity-70">({count})</span>
+                        </button>
+                      );
+                    })}
                 </div>
               </div>
 

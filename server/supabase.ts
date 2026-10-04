@@ -107,8 +107,13 @@ async function ensureCloudDbBucket(): Promise<SupabaseClient | null> {
   if (!dbBucketVerified) {
     try {
       const { data: buckets } = await sb.storage.listBuckets();
-      if (buckets && !buckets.some((b) => b.name === DB_BUCKET)) {
-        await sb.storage.createBucket(DB_BUCKET, { public: false });
+      if (buckets) {
+        const existing = buckets.find((b) => b.name === DB_BUCKET);
+        if (!existing) {
+          await sb.storage.createBucket(DB_BUCKET, { public: true });
+        } else if (!existing.public) {
+          await sb.storage.updateBucket(DB_BUCKET, { public: true });
+        }
       }
       dbBucketVerified = true;
     } catch {
@@ -505,23 +510,30 @@ export async function fetchAllSupabaseProducts(): Promise<Product[] | null> {
   const sb = getSupabaseAdmin() || getSupabase();
   if (!sb) return null;
   try {
+    let sqlProducts: Product[] = [];
     const { data, error } = await sb
       .from('products')
       .select('*')
       .order('created_at', { ascending: false });
     if (!error && data) {
-      return data.map(mapSupabaseRowToProduct);
-    }
-    if (error && !isTableMissingError(error.message)) {
+      sqlProducts = data.map(mapSupabaseRowToProduct);
+    } else if (error && !isTableMissingError(error.message)) {
+      console.error('[Server Supabase][Table:products][Op:SELECT] Error:', error.message);
       const { data: fbData, error: fbErr } = await sb.from('products').select('*');
       if (!fbErr && fbData) {
-        return fbData.map(mapSupabaseRowToProduct);
+        sqlProducts = fbData.map(mapSupabaseRowToProduct);
       }
     }
-    // Fallback to Supabase Cloud Storage database
     const cloudProducts = await readCloudTable<Product>('products');
-    return cloudProducts;
-  } catch {
+    if (sqlProducts.length > 0 || (cloudProducts && cloudProducts.length > 0)) {
+      const mergedMap = new Map<string, Product>();
+      if (cloudProducts) cloudProducts.forEach((p) => mergedMap.set(p.id, p));
+      sqlProducts.forEach((p) => mergedMap.set(p.id, p));
+      return Array.from(mergedMap.values());
+    }
+    return sqlProducts;
+  } catch (err: any) {
+    console.error('[Server Supabase][Table:products][Op:SELECT] Exception:', err?.message);
     return await readCloudTable<Product>('products');
   }
 }
@@ -632,21 +644,30 @@ export async function fetchAllSupabaseCategories(): Promise<Category[] | null> {
   const sb = getSupabaseAdmin() || getSupabase();
   if (!sb) return null;
   try {
+    let sqlCats: Category[] = [];
     const { data, error } = await sb
       .from('categories')
       .select('*')
       .order('created_at', { ascending: true });
     if (!error && data) {
-      return data.map(mapSupabaseRowToCategory);
-    }
-    if (error && !isTableMissingError(error.message)) {
+      sqlCats = data.map(mapSupabaseRowToCategory);
+    } else if (error && !isTableMissingError(error.message)) {
+      console.error('[Server Supabase][Table:categories][Op:SELECT] Error:', error.message);
       const { data: fallbackData, error: fallbackErr } = await sb.from('categories').select('*');
       if (!fallbackErr && fallbackData) {
-        return fallbackData.map(mapSupabaseRowToCategory);
+        sqlCats = fallbackData.map(mapSupabaseRowToCategory);
       }
     }
-    return await readCloudTable<Category>('categories');
-  } catch {
+    const cloudCats = await readCloudTable<Category>('categories');
+    if (sqlCats.length > 0 || (cloudCats && cloudCats.length > 0)) {
+      const mergedMap = new Map<string, Category>();
+      if (cloudCats) cloudCats.forEach((c) => mergedMap.set(c.id, c));
+      sqlCats.forEach((c) => mergedMap.set(c.id, c));
+      return Array.from(mergedMap.values());
+    }
+    return sqlCats;
+  } catch (err: any) {
+    console.error('[Server Supabase][Table:categories][Op:SELECT] Exception:', err?.message);
     return await readCloudTable<Category>('categories');
   }
 }
@@ -730,21 +751,32 @@ export async function fetchAllSupabaseOrders(): Promise<Order[] | null> {
   const sb = getSupabaseAdmin() || getSupabase();
   if (!sb) return null;
   try {
+    let sqlOrders: Order[] = [];
     const { data, error } = await sb
       .from('orders')
       .select('*')
       .order('created_at', { ascending: false });
     if (!error && data) {
-      return data.map(mapSupabaseRowToOrder);
-    }
-    if (error && !isTableMissingError(error.message)) {
+      sqlOrders = data.map(mapSupabaseRowToOrder);
+    } else if (error && !isTableMissingError(error.message)) {
+      console.error('[Server Supabase][Table:orders][Op:SELECT] Error:', error.message);
       const { data: fallbackData, error: fallbackErr } = await sb.from('orders').select('*');
       if (!fallbackErr && fallbackData) {
-        return fallbackData.map(mapSupabaseRowToOrder);
+        sqlOrders = fallbackData.map(mapSupabaseRowToOrder);
       }
     }
-    return await readCloudTable<Order>('orders');
-  } catch {
+    const cloudOrders = await readCloudTable<Order>('orders');
+    if (sqlOrders.length > 0 || (cloudOrders && cloudOrders.length > 0)) {
+      const mergedMap = new Map<string, Order>();
+      if (cloudOrders) cloudOrders.forEach((o) => mergedMap.set(o.id, o));
+      sqlOrders.forEach((o) => mergedMap.set(o.id, o));
+      return Array.from(mergedMap.values()).sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+    }
+    return sqlOrders;
+  } catch (err: any) {
+    console.error('[Server Supabase][Table:orders][Op:SELECT] Exception:', err?.message);
     return await readCloudTable<Order>('orders');
   }
 }
@@ -944,14 +976,8 @@ export const supabaseService = {
     };
   },
 
-  async getProducts(fallbackSeed?: Product[]): Promise<Product[] | null> {
-    const list = await fetchAllSupabaseProducts();
-    if (list !== null) return list;
-    if (fallbackSeed && fallbackSeed.length > 0 && isSupabaseConfigured()) {
-      await writeCloudTable('products', fallbackSeed);
-      return fallbackSeed;
-    }
-    return null;
+  async getProducts(_fallbackSeed?: Product[]): Promise<Product[] | null> {
+    return await fetchAllSupabaseProducts();
   },
 
   async insertProduct(product: Product, fallbackCurrentList?: Product[]): Promise<{ success: boolean; data?: Product; error?: string; tableMissing?: boolean }> {
@@ -1019,14 +1045,8 @@ export const supabaseService = {
     };
   },
 
-  async getCategories(fallbackSeed?: Category[]): Promise<Category[] | null> {
-    const list = await fetchAllSupabaseCategories();
-    if (list !== null) return list;
-    if (fallbackSeed && fallbackSeed.length > 0 && isSupabaseConfigured()) {
-      await writeCloudTable('categories', fallbackSeed);
-      return fallbackSeed;
-    }
-    return null;
+  async getCategories(_fallbackSeed?: Category[]): Promise<Category[] | null> {
+    return await fetchAllSupabaseCategories();
   },
 
   async insertCategory(category: Category, fallbackCurrentList?: Category[]): Promise<{ success: boolean; data?: Category; error?: string; tableMissing?: boolean }> {
@@ -1079,14 +1099,8 @@ export const supabaseService = {
     };
   },
 
-  async getOrders(fallbackSeed?: Order[]): Promise<Order[] | null> {
-    const list = await fetchAllSupabaseOrders();
-    if (list !== null) return list;
-    if (fallbackSeed && isSupabaseConfigured()) {
-      await writeCloudTable('orders', fallbackSeed);
-      return fallbackSeed;
-    }
-    return null;
+  async getOrders(_fallbackSeed?: Order[]): Promise<Order[] | null> {
+    return await fetchAllSupabaseOrders();
   },
 
   async insertOrder(order: Order, fallbackCurrentList?: Order[]): Promise<{ success: boolean; data?: Order; error?: string; tableMissing?: boolean }> {

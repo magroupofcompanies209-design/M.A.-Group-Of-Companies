@@ -155,6 +155,38 @@ export const CheckoutPage: React.FC = () => {
         customerNotes: formData.customerNotes.trim() || undefined,
       };
 
+      let finalOrder: Order | null = null;
+      let directSavedOrder: Order | null = null;
+      let directError: string | undefined;
+
+      // 1. Construct authoritative Order object for Supabase
+      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+      const clientOrderCandidate: Order = {
+        id: 'ord-' + Date.now(),
+        orderNumber: `MAG-${randomSuffix}`,
+        customer: orderPayload.customer,
+        items: orderPayload.items,
+        subtotal: cartSubtotal,
+        discount: appliedCoupon?.discount || 0,
+        shippingFee: cartShippingFee,
+        grandTotal: cartGrandTotal,
+        status: 'Pending',
+        paymentMethod: 'Cash on Delivery',
+        paymentStatus: 'COD Pending',
+        couponCode: appliedCoupon?.code,
+        customerNotes: orderPayload.customerNotes,
+        timeline: [
+          {
+            status: 'Pending',
+            timestamp: new Date().toISOString(),
+            note: 'Order submitted with Cash on Delivery payment.',
+          },
+        ],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      // 2. Submit to backend API (which also writes to Supabase via service-role key)
       const res = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -163,30 +195,46 @@ export const CheckoutPage: React.FC = () => {
 
       const data = await safeJsonResponse(res, { error: 'Failed to place order.' });
 
-      if (!res.ok || data.error) {
-        throw new Error(data.error || 'Failed to place order.');
+      if (res.ok && data && !data.error && data.id) {
+        finalOrder = data as Order;
       }
 
-      // Also ensure direct Supabase order persistence if frontend client is configured
-      if (isFrontendSupabaseConfigured && supabase && data && data.id) {
-        await insertOrUpdateOrderInSupabase(data as Order);
-        for (const item of cart) {
-          if (item.product) {
-            const nextStock = Math.max(0, (item.product.stock || 0) - item.quantity);
-            await insertOrUpdateProductInSupabase({
-              ...item.product,
-              stock: nextStock,
-              updatedAt: new Date().toISOString(),
-            });
+      // 3. Ensure direct Supabase INSERT into `orders` table using the shared Supabase client
+      if (isFrontendSupabaseConfigured && supabase) {
+        const orderToInsert = finalOrder || clientOrderCandidate;
+        const supaOrderRes = await insertOrUpdateOrderInSupabase(orderToInsert);
+        if (supaOrderRes.ok && supaOrderRes.order) {
+          directSavedOrder = supaOrderRes.order;
+          if (!finalOrder) {
+            finalOrder = directSavedOrder;
           }
+          // Update product stock in Supabase
+          for (const item of cart) {
+            if (item.product) {
+              const nextStock = Math.max(0, (item.product.stock || 0) - item.quantity);
+              await insertOrUpdateProductInSupabase({
+                ...item.product,
+                stock: nextStock,
+                updatedAt: new Date().toISOString(),
+              });
+            }
+          }
+        } else {
+          directError = supaOrderRes.error;
         }
+      }
+
+      if (!finalOrder) {
+        throw new Error(
+          directError || data?.error || 'Order could not be saved to Supabase. Please check connection.'
+        );
       }
 
       // Success
       clearCart();
       await refreshProducts();
-      showToast(`Order ${data.orderNumber} placed successfully!`, 'success');
-      navigate('order-success', { orderNumber: data.orderNumber });
+      showToast(`Order ${finalOrder.orderNumber} placed successfully!`, 'success');
+      navigate('order-success', { orderNumber: finalOrder.orderNumber });
     } catch (err: any) {
       setErrorMsg(err.message || 'An error occurred during order submission. Please try again.');
       showToast(err.message || 'Order failed', 'error');

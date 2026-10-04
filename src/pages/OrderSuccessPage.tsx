@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '../context/StoreContext';
 import { safeJsonResponse } from '../utils/api';
+import { fetchOrderByOrderNumberFromSupabase } from '../lib/supabaseClient';
 import type { Order } from '../types';
 
 export const OrderSuccessPage: React.FC = () => {
@@ -25,15 +26,29 @@ export const OrderSuccessPage: React.FC = () => {
       return;
     }
 
-    fetch(`/api/orders/track/${encodeURIComponent(orderNumber)}`)
-      .then((r) => safeJsonResponse<Order | null>(r, null))
-      .then((data) => {
+    const loadOrder = async () => {
+      try {
+        const supaOrder = await fetchOrderByOrderNumberFromSupabase(orderNumber);
+        if (supaOrder) {
+          setOrder(supaOrder);
+          setLoading(false);
+          return;
+        }
+        const res = await fetch(`/api/orders/track/${encodeURIComponent(orderNumber)}?_t=${Date.now()}`, {
+          cache: 'no-store',
+        });
+        const data = await safeJsonResponse<Order | null>(res, null);
         if (data && !(data as any).error) {
           setOrder(data);
         }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+      } catch {
+        // ignore
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadOrder();
   }, [orderNumber]);
 
   if (loading) {

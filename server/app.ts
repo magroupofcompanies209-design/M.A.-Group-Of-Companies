@@ -355,7 +355,18 @@ app.get('/api/products', async (req: Request, res: Response) => {
 });
 
 // GET /api/products/:id
-app.get('/api/products/:id', (req: Request, res: Response) => {
+app.get('/api/products/:id', async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaProducts = await supabaseService.getProducts();
+      if (supaProducts !== null) {
+        db.syncProducts(supaProducts);
+      }
+    } catch {
+      // ignore
+    }
+  }
   const product = db.getProductById(req.params.id);
   if (!product) {
     return res.status(404).json({ error: 'Product not found' });
@@ -752,12 +763,12 @@ app.get('/api/categories', async (_req: Request, res: Response) => {
   if (supabaseService.isConfigured()) {
     try {
       const supaCats = await supabaseService.getCategories();
-      if (supaCats && supaCats.length > 0) {
+      if (supaCats !== null) {
         db.syncCategories(supaCats);
         return res.json(supaCats);
       }
-    } catch {
-      // Fallback to local
+    } catch (err: any) {
+      console.error('Supabase categories fetch error:', err?.message);
     }
   }
   return res.json(db.getCategories());

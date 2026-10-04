@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type { Product, Category, Order, StoreSettings } from '../types/index';
+import type { Product, Category, Order } from '../types/index';
 
 const supabaseUrl = (
   import.meta.env.VITE_SUPABASE_URL ||
@@ -19,12 +19,33 @@ export const isFrontendSupabaseConfigured = Boolean(
   supabaseUrl && supabaseAnonKey && supabaseUrl.startsWith('https://')
 );
 
+export const supabaseProjectId = supabaseUrl
+  ? supabaseUrl.replace(/^https?:\/\//, '').split('.')[0]
+  : 'not-configured';
+
 export const supabase: SupabaseClient | null = isFrontendSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null;
 
 const CLOUD_DB_BUCKET = 'ma-group-database';
 const PUBLIC_IMAGES_BUCKET = 'product-images';
+
+// Track whether relational SQL tables exist in PostgREST schema cache to avoid noisy 404 requests
+const sqlTableAvailability: Record<string, boolean> = {};
+
+function logSupabaseOp(
+  table: string,
+  operation: string,
+  status: 'OK' | 'ERROR' | 'CLOUD_DB',
+  details?: string
+) {
+  const prefix = `[Supabase][Project:${supabaseProjectId}][Table:${table}][Op:${operation}]`;
+  if (status === 'ERROR') {
+    console.warn(`${prefix} ${details || 'Operation error'}`);
+  } else {
+    console.info(`${prefix} ${status}${details ? ` — ${details}` : ''}`);
+  }
+}
 
 function isTableOrSchemaMissingError(err?: string): boolean {
   if (!err) return false;
@@ -379,11 +400,43 @@ export function mapOrderToSupabaseRow(order: Order): Record<string, any> {
   };
 }
 
+export function mapOrderToCoreSupabaseRow(order: Order, includeId: boolean = true): Record<string, any> {
+  const row: Record<string, any> = {
+    customer_name: order.customer?.fullName || 'Customer',
+    phone: order.customer?.phone || '',
+    address: `${order.customer?.addressLine || ''}${order.customer?.city ? `, ${order.customer.city}` : ''}`,
+    products: order.items || [],
+    total_amount: Number(order.grandTotal || 0),
+    payment_method: 'COD',
+    order_status: order.status || 'Pending',
+  };
+  if (includeId && order.id) {
+    row.id = order.id;
+  }
+  return row;
+}
+
 // ============================================================================
-// CLOUD STORAGE JSON TABLE FALLBACK (Browser Direct Support)
+// SUPABASE CLOUD TABLE ENGINE (Public URL + Authenticated Storage Support)
 // ============================================================================
 
 async function readCloudTableFromSupabase<T>(tableName: string): Promise<T[] | null> {
+  // 1. Direct public URL read with cache-buster (works with anon key even without storage RLS policies)
+  if (supabaseUrl) {
+    try {
+      const publicUrl = `${supabaseUrl}/storage/v1/object/public/${CLOUD_DB_BUCKET}/${tableName}.json?_t=${Date.now()}`;
+      const res = await fetch(publicUrl, { cache: 'no-store' });
+      if (res.ok) {
+        const parsed = await res.json();
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+      }
+    } catch {
+      // Fall through to SDK download
+    }
+  }
+
   if (!supabase) return null;
   try {
     const { data, error } = await supabase.storage
@@ -441,38 +494,63 @@ async function writeCloudTableToSupabase<T>(
 // ============================================================================
 
 export async function fetchProductsFromSupabase(): Promise<Product[]> {
-  // 1. Try direct Supabase query first if VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY are configured
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .order('created_at', { ascending: false });
+  let sqlProducts: Product[] = [];
+  let cloudProducts: Product[] = [];
 
-      if (!error && data && data.length > 0) {
-        return data.map(mapSupabaseRowToProduct);
-      }
-      if (error && !isTableOrSchemaMissingError(error.message)) {
-        const { data: fbData, error: fbErr } = await supabase.from('products').select('*');
-        if (!fbErr && fbData && fbData.length > 0) {
-          return fbData.map(mapSupabaseRowToProduct);
+  if (supabase) {
+    // 1. Read from Supabase Cloud Storage database (`ma-group-database/products.json`)
+    const cp = await readCloudTableFromSupabase<Product>('products');
+    if (cp && cp.length > 0) {
+      cloudProducts = cp.map(mapSupabaseRowToProduct);
+      logSupabaseOp('products', 'SELECT', 'CLOUD_DB', `Loaded ${cloudProducts.length} products from Supabase (${supabaseProjectId})`);
+    }
+
+    // 2. Also query relational SQL table `public.products` if available
+    if (sqlTableAvailability['products'] !== false) {
+      try {
+        const { data, error } = await supabase
+          .from('products')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error && data) {
+          sqlTableAvailability['products'] = true;
+          sqlProducts = data.map(mapSupabaseRowToProduct);
+          logSupabaseOp('products', 'SELECT (SQL)', 'OK', `Loaded ${sqlProducts.length} rows`);
+        } else if (error) {
+          if (isTableOrSchemaMissingError(error.message)) {
+            sqlTableAvailability['products'] = false;
+          } else {
+            const { data: fbData, error: fbErr } = await supabase.from('products').select('*');
+            if (!fbErr && fbData) {
+              sqlTableAvailability['products'] = true;
+              sqlProducts = fbData.map(mapSupabaseRowToProduct);
+            }
+          }
         }
+      } catch {
+        // Ignore SQL error when Cloud DB is active
       }
-      const cloudProducts = await readCloudTableFromSupabase<Product>('products');
-      if (cloudProducts && cloudProducts.length > 0) {
-        return cloudProducts;
-      }
-    } catch {
-      // Fallback to API
     }
   }
 
-  // 2. Fetch from unified backend API
+  // Merge SQL products and Cloud Bucket products from the same Supabase project
+  if (sqlProducts.length > 0 || cloudProducts.length > 0) {
+    const mergedMap = new Map<string, Product>();
+    cloudProducts.forEach((p) => mergedMap.set(p.id, p));
+    sqlProducts.forEach((p) => mergedMap.set(p.id, p));
+    return Array.from(mergedMap.values());
+  }
+
+  // 3. Also query unified backend API (which connects to the same Supabase project via SUPABASE_SERVICE_ROLE_KEY)
   const res = await fetch(`/api/products?_t=${Date.now()}`, {
     headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
   });
   if (!res.ok) {
-    throw new Error(`Failed to load products from Supabase (${res.status})`);
+    const errBody = await res.json().catch(() => ({}));
+    const errMsg = errBody?.error || `Failed to load products from Supabase (${res.status})`;
+    logSupabaseOp('products', 'API_SELECT', 'ERROR', errMsg);
+    throw new Error(errMsg);
   }
   const data = await res.json();
   return Array.isArray(data) ? data : [];
@@ -483,54 +561,63 @@ export async function insertOrUpdateProductInSupabase(
   currentProducts?: Product[]
 ): Promise<{ ok: boolean; product?: Product; error?: string }> {
   if (!supabase) {
-    return { ok: false, error: 'Frontend Supabase client not configured' };
+    return { ok: false, error: 'Frontend Supabase client not configured (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY missing)' };
   }
 
   try {
-    const row = mapProductToSupabaseRow(product);
-    const { data, error } = await supabase
-      .from('products')
-      .upsert(row, { onConflict: 'id' })
-      .select('*')
-      .maybeSingle();
-
-    if (!error) {
-      const saved = data ? mapSupabaseRowToProduct(data) : product;
-      return { ok: true, product: saved };
-    }
-
-    if (!isTableOrSchemaMissingError(error.message)) {
-      const coreRow = mapProductToCoreSupabaseRow(product, true);
-      const { data: fbData, error: fbErr } = await supabase
+    if (sqlTableAvailability['products'] !== false) {
+      const row = mapProductToSupabaseRow(product);
+      const { data, error } = await supabase
         .from('products')
-        .upsert(coreRow, { onConflict: 'id' })
+        .upsert(row, { onConflict: 'id' })
         .select('*')
         .maybeSingle();
-      if (!fbErr) {
-        return { ok: true, product: fbData ? mapSupabaseRowToProduct(fbData) : product };
+
+      if (!error) {
+        sqlTableAvailability['products'] = true;
+        const saved = data ? mapSupabaseRowToProduct(data) : product;
+        logSupabaseOp('products', 'UPSERT', 'OK', `Saved product "${saved.name}" (${saved.id})`);
+        const list = (await readCloudTableFromSupabase<Product>('products')) || currentProducts || [];
+        const idx = list.findIndex((p) => p.id === saved.id);
+        if (idx > -1) list[idx] = saved;
+        else list.unshift(saved);
+        await writeCloudTableToSupabase('products', list);
+        return { ok: true, product: saved };
       }
 
-      const coreWithoutId = mapProductToCoreSupabaseRow(product, false);
-      const { data: insData, error: insErr } = await supabase
-        .from('products')
-        .insert(coreWithoutId)
-        .select('*')
-        .maybeSingle();
-      if (!insErr) {
-        return { ok: true, product: insData ? mapSupabaseRowToProduct(insData) : product };
+      if (isTableOrSchemaMissingError(error.message)) {
+        sqlTableAvailability['products'] = false;
+      } else {
+        const coreRow = mapProductToCoreSupabaseRow(product, true);
+        const { data: fbData, error: fbErr } = await supabase
+          .from('products')
+          .upsert(coreRow, { onConflict: 'id' })
+          .select('*')
+          .maybeSingle();
+        if (!fbErr) {
+          const saved = fbData ? { ...product, ...mapSupabaseRowToProduct(fbData) } : product;
+          logSupabaseOp('products', 'UPSERT (core)', 'OK', `Saved product "${saved.name}"`);
+          const list = (await readCloudTableFromSupabase<Product>('products')) || currentProducts || [];
+          const idx = list.findIndex((p) => p.id === saved.id);
+          if (idx > -1) list[idx] = saved;
+          else list.unshift(saved);
+          await writeCloudTableToSupabase('products', list);
+          return { ok: true, product: saved };
+        }
       }
     }
 
-    // Fallback to Cloud Bucket
+    // Write to Supabase Cloud Bucket
     const list = (await readCloudTableFromSupabase<Product>('products')) || currentProducts || [];
     const idx = list.findIndex((p) => p.id === product.id);
     if (idx > -1) list[idx] = product;
     else list.unshift(product);
     const cloudRes = await writeCloudTableToSupabase('products', list);
     if (cloudRes.ok) {
+      logSupabaseOp('products', 'UPSERT', 'CLOUD_DB', `Saved "${product.name}" to Supabase Storage`);
       return { ok: true, product };
     }
-    return { ok: false, error: error.message };
+    return { ok: false, error: cloudRes.error || 'Direct storage write requires backend service-role key' };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'Supabase product write failed' };
   }
@@ -542,17 +629,25 @@ export async function deleteProductInSupabase(
 ): Promise<{ ok: boolean; error?: string }> {
   if (!supabase) return { ok: false, error: 'Frontend Supabase client not configured' };
   try {
-    const { error } = await supabase.from('products').delete().eq('id', id);
-    if (error && !isTableOrSchemaMissingError(error.message)) {
-      return { ok: false, error: error.message };
+    if (sqlTableAvailability['products'] !== false) {
+      const { error } = await supabase.from('products').delete().eq('id', id);
+      if (error && isTableOrSchemaMissingError(error.message)) {
+        sqlTableAvailability['products'] = false;
+      } else if (error) {
+        return { ok: false, error: error.message };
+      }
     }
     const list = (await readCloudTableFromSupabase<Product>('products')) || currentProducts;
     if (list) {
-      await writeCloudTableToSupabase(
+      const cloudRes = await writeCloudTableToSupabase(
         'products',
         list.filter((p) => p.id !== id)
       );
+      if (!cloudRes.ok && sqlTableAvailability['products'] === false) {
+        return { ok: false, error: cloudRes.error };
+      }
     }
+    logSupabaseOp('products', 'DELETE', 'OK', `Deleted product ID ${id}`);
     return { ok: true };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'Failed to delete product from Supabase' };
@@ -560,29 +655,57 @@ export async function deleteProductInSupabase(
 }
 
 export async function fetchCategoriesFromSupabase(): Promise<Category[]> {
+  let sqlCats: Category[] = [];
+  let cloudCats: Category[] = [];
+
   if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('categories')
-        .select('*')
-        .order('created_at', { ascending: true });
-      if (!error && data && data.length > 0) {
-        return data.map(mapSupabaseRowToCategory);
-      }
-      const cloudCats = await readCloudTableFromSupabase<Category>('categories');
-      if (cloudCats && cloudCats.length > 0) {
-        return cloudCats;
-      }
-    } catch {
-      // Fallback to API
+    const cc = await readCloudTableFromSupabase<Category>('categories');
+    if (cc && cc.length > 0) {
+      cloudCats = cc.map(mapSupabaseRowToCategory);
+      logSupabaseOp('categories', 'SELECT', 'CLOUD_DB', `Loaded ${cloudCats.length} categories from Supabase (${supabaseProjectId})`);
     }
+
+    if (sqlTableAvailability['categories'] !== false) {
+      try {
+        const { data, error } = await supabase
+          .from('categories')
+          .select('*')
+          .order('created_at', { ascending: true });
+        if (!error && data) {
+          sqlTableAvailability['categories'] = true;
+          sqlCats = data.map(mapSupabaseRowToCategory);
+        } else if (error) {
+          if (isTableOrSchemaMissingError(error.message)) {
+            sqlTableAvailability['categories'] = false;
+          } else {
+            const { data: fbData, error: fbErr } = await supabase.from('categories').select('*');
+            if (!fbErr && fbData) {
+              sqlTableAvailability['categories'] = true;
+              sqlCats = fbData.map(mapSupabaseRowToCategory);
+            }
+          }
+        }
+      } catch {
+        // Ignore SQL error when Cloud DB is active
+      }
+    }
+  }
+
+  if (sqlCats.length > 0 || cloudCats.length > 0) {
+    const mergedMap = new Map<string, Category>();
+    cloudCats.forEach((c) => mergedMap.set(c.id, c));
+    sqlCats.forEach((c) => mergedMap.set(c.id, c));
+    return Array.from(mergedMap.values());
   }
 
   const res = await fetch(`/api/categories?_t=${Date.now()}`, {
     headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
   });
   if (!res.ok) {
-    throw new Error(`Failed to load categories from Supabase (${res.status})`);
+    const errBody = await res.json().catch(() => ({}));
+    const errMsg = errBody?.error || `Failed to load categories from Supabase (${res.status})`;
+    logSupabaseOp('categories', 'API_SELECT', 'ERROR', errMsg);
+    throw new Error(errMsg);
   }
   const data = await res.json();
   return Array.isArray(data) ? data : [];
@@ -594,22 +717,39 @@ export async function insertOrUpdateCategoryInSupabase(
 ): Promise<{ ok: boolean; category?: Category; error?: string }> {
   if (!supabase) return { ok: false, error: 'Frontend Supabase client not configured' };
   try {
-    const row = mapCategoryToSupabaseRow(category);
-    const { data, error } = await supabase
-      .from('categories')
-      .upsert(row, { onConflict: 'id' })
-      .select('*')
-      .maybeSingle();
-    if (!error) {
-      return { ok: true, category: data ? mapSupabaseRowToCategory(data) : category };
+    if (sqlTableAvailability['categories'] !== false) {
+      const row = mapCategoryToSupabaseRow(category);
+      const { data, error } = await supabase
+        .from('categories')
+        .upsert(row, { onConflict: 'id' })
+        .select('*')
+        .maybeSingle();
+      if (!error) {
+        sqlTableAvailability['categories'] = true;
+        const saved = data ? mapSupabaseRowToCategory(data) : category;
+        logSupabaseOp('categories', 'UPSERT', 'OK', `Saved category "${saved.name}" (${saved.id})`);
+        const list = (await readCloudTableFromSupabase<Category>('categories')) || currentCategories || [];
+        const idx = list.findIndex((c) => c.id === saved.id);
+        if (idx > -1) list[idx] = saved;
+        else list.push(saved);
+        await writeCloudTableToSupabase('categories', list);
+        return { ok: true, category: saved };
+      }
+      if (isTableOrSchemaMissingError(error.message)) {
+        sqlTableAvailability['categories'] = false;
+      }
     }
+
     const list = (await readCloudTableFromSupabase<Category>('categories')) || currentCategories || [];
     const idx = list.findIndex((c) => c.id === category.id);
     if (idx > -1) list[idx] = category;
     else list.push(category);
     const cloudRes = await writeCloudTableToSupabase('categories', list);
-    if (cloudRes.ok) return { ok: true, category };
-    return { ok: false, error: error.message };
+    if (cloudRes.ok) {
+      logSupabaseOp('categories', 'UPSERT', 'CLOUD_DB', `Saved "${category.name}" to Supabase Storage`);
+      return { ok: true, category };
+    }
+    return { ok: false, error: cloudRes.error || 'Direct storage write requires backend service-role key' };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'Failed to save category in Supabase' };
   }
@@ -621,16 +761,23 @@ export async function deleteCategoryInSupabase(
 ): Promise<{ ok: boolean; error?: string }> {
   if (!supabase) return { ok: false, error: 'Frontend Supabase client not configured' };
   try {
-    const { error } = await supabase.from('categories').delete().eq('id', id);
-    if (error && !isTableOrSchemaMissingError(error.message)) {
-      return { ok: false, error: error.message };
+    if (sqlTableAvailability['categories'] !== false) {
+      const { error } = await supabase.from('categories').delete().eq('id', id);
+      if (error && isTableOrSchemaMissingError(error.message)) {
+        sqlTableAvailability['categories'] = false;
+      } else if (error) {
+        return { ok: false, error: error.message };
+      }
     }
     const list = (await readCloudTableFromSupabase<Category>('categories')) || currentCategories;
     if (list) {
-      await writeCloudTableToSupabase(
+      const cloudRes = await writeCloudTableToSupabase(
         'categories',
         list.filter((c) => c.id !== id)
       );
+      if (!cloudRes.ok && sqlTableAvailability['categories'] === false) {
+        return { ok: false, error: cloudRes.error };
+      }
     }
     return { ok: true };
   } catch (err: any) {
@@ -639,19 +786,62 @@ export async function deleteCategoryInSupabase(
 }
 
 export async function fetchOrdersFromSupabase(): Promise<Order[] | null> {
-  if (!supabase) return null;
+  if (!supabase && !supabaseUrl) return null;
   try {
-    const { data, error } = await supabase
-      .from('orders')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (!error && data) {
-      return data.map(mapSupabaseRowToOrder);
+    let sqlOrders: Order[] = [];
+    const cloudOrders = await readCloudTableFromSupabase<Order>('orders');
+    if (cloudOrders && cloudOrders.length > 0) {
+      logSupabaseOp('orders', 'SELECT', 'CLOUD_DB', `Loaded ${cloudOrders.length} orders from Supabase (${supabaseProjectId})`);
     }
-    return await readCloudTableFromSupabase<Order>('orders');
+
+    if (supabase && sqlTableAvailability['orders'] !== false) {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (!error && data) {
+        sqlTableAvailability['orders'] = true;
+        sqlOrders = data.map(mapSupabaseRowToOrder);
+      } else if (error) {
+        if (isTableOrSchemaMissingError(error.message)) {
+          sqlTableAvailability['orders'] = false;
+        } else {
+          const { data: fbData, error: fbErr } = await supabase.from('orders').select('*');
+          if (!fbErr && fbData) {
+            sqlTableAvailability['orders'] = true;
+            sqlOrders = fbData.map(mapSupabaseRowToOrder);
+          }
+        }
+      }
+    }
+
+    if (sqlOrders.length > 0 || (cloudOrders && cloudOrders.length > 0)) {
+      const mergedMap = new Map<string, Order>();
+      if (cloudOrders) cloudOrders.forEach((o) => mergedMap.set(o.id, mapSupabaseRowToOrder(o)));
+      sqlOrders.forEach((o) => mergedMap.set(o.id, o));
+      return Array.from(mergedMap.values()).sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+    }
+    return sqlOrders;
   } catch {
     return null;
   }
+}
+
+export async function fetchOrderByOrderNumberFromSupabase(orderNumber: string): Promise<Order | null> {
+  const cleanNum = orderNumber.trim();
+  if (!cleanNum) return null;
+  const all = await fetchOrdersFromSupabase();
+  if (all && all.length > 0) {
+    const match = all.find(
+      (o) =>
+        o.orderNumber.toLowerCase() === cleanNum.toLowerCase() ||
+        o.id.toLowerCase() === cleanNum.toLowerCase()
+    );
+    if (match) return match;
+  }
+  return null;
 }
 
 export async function insertOrUpdateOrderInSupabase(
@@ -660,22 +850,52 @@ export async function insertOrUpdateOrderInSupabase(
 ): Promise<{ ok: boolean; order?: Order; error?: string }> {
   if (!supabase) return { ok: false, error: 'Frontend Supabase client not configured' };
   try {
-    const row = mapOrderToSupabaseRow(order);
-    const { data, error } = await supabase
-      .from('orders')
-      .upsert(row, { onConflict: 'id' })
-      .select('*')
-      .maybeSingle();
-    if (!error) {
-      return { ok: true, order: data ? mapSupabaseRowToOrder(data) : order };
+    if (sqlTableAvailability['orders'] !== false) {
+      const row = mapOrderToSupabaseRow(order);
+      const { data, error } = await supabase
+        .from('orders')
+        .upsert(row, { onConflict: 'id' })
+        .select('*')
+        .maybeSingle();
+      if (!error) {
+        sqlTableAvailability['orders'] = true;
+        const saved = data ? mapSupabaseRowToOrder(data) : order;
+        logSupabaseOp('orders', 'UPSERT', 'OK', `Saved order #${saved.orderNumber} (${saved.id})`);
+        const list = (await readCloudTableFromSupabase<Order>('orders')) || currentOrders || [];
+        const idx = list.findIndex((o) => o.id === saved.id);
+        if (idx > -1) list[idx] = saved;
+        else list.unshift(saved);
+        await writeCloudTableToSupabase('orders', list);
+        return { ok: true, order: saved };
+      }
+
+      if (isTableOrSchemaMissingError(error.message)) {
+        sqlTableAvailability['orders'] = false;
+      } else {
+        const coreRow = mapOrderToCoreSupabaseRow(order, true);
+        const { data: fbData, error: fbErr } = await supabase
+          .from('orders')
+          .upsert(coreRow, { onConflict: 'id' })
+          .select('*')
+          .maybeSingle();
+        if (!fbErr) {
+          const saved = fbData ? { ...order, ...mapSupabaseRowToOrder(fbData) } : order;
+          logSupabaseOp('orders', 'UPSERT (core)', 'OK', `Saved order #${saved.orderNumber}`);
+          return { ok: true, order: saved };
+        }
+      }
     }
+
     const list = (await readCloudTableFromSupabase<Order>('orders')) || currentOrders || [];
     const idx = list.findIndex((o) => o.id === order.id);
     if (idx > -1) list[idx] = order;
     else list.unshift(order);
     const cloudRes = await writeCloudTableToSupabase('orders', list);
-    if (cloudRes.ok) return { ok: true, order };
-    return { ok: false, error: error.message };
+    if (cloudRes.ok) {
+      logSupabaseOp('orders', 'UPSERT', 'CLOUD_DB', `Saved order #${order.orderNumber} to Supabase Storage`);
+      return { ok: true, order };
+    }
+    return { ok: false, error: cloudRes.error || 'Order saved via backend service-role key' };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'Failed to save order in Supabase' };
   }
@@ -687,16 +907,23 @@ export async function deleteOrderInSupabase(
 ): Promise<{ ok: boolean; error?: string }> {
   if (!supabase) return { ok: false, error: 'Frontend Supabase client not configured' };
   try {
-    const { error } = await supabase.from('orders').delete().eq('id', id);
-    if (error && !isTableOrSchemaMissingError(error.message)) {
-      return { ok: false, error: error.message };
+    if (sqlTableAvailability['orders'] !== false) {
+      const { error } = await supabase.from('orders').delete().eq('id', id);
+      if (error && isTableOrSchemaMissingError(error.message)) {
+        sqlTableAvailability['orders'] = false;
+      } else if (error) {
+        return { ok: false, error: error.message };
+      }
     }
     const list = (await readCloudTableFromSupabase<Order>('orders')) || currentOrders;
     if (list) {
-      await writeCloudTableToSupabase(
+      const cloudRes = await writeCloudTableToSupabase(
         'orders',
         list.filter((o) => o.id !== id)
       );
+      if (!cloudRes.ok && sqlTableAvailability['orders'] === false) {
+        return { ok: false, error: cloudRes.error };
+      }
     }
     return { ok: true };
   } catch (err: any) {
@@ -720,6 +947,7 @@ export async function uploadImageDirectlyToSupabaseStorage(
       return { ok: false, error: error.message };
     }
     const { data } = supabase.storage.from(bucketName).getPublicUrl(storagePath);
+    logSupabaseOp(bucketName, 'STORAGE_UPLOAD', 'OK', data.publicUrl);
     return { ok: true, publicUrl: data.publicUrl };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'Direct storage upload failed' };

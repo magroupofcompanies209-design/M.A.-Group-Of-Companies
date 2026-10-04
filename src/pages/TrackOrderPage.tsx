@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { safeJsonResponse } from '../utils/api';
+import { fetchOrderByOrderNumberFromSupabase } from '../lib/supabaseClient';
 import { Order, OrderStatus } from '../types';
 import {
   Truck,
@@ -41,10 +42,29 @@ export const TrackOrderPage: React.FC = () => {
     setOrder(null);
 
     try {
+      const supaOrder = await fetchOrderByOrderNumberFromSupabase(orderNumberInput.trim());
+      if (supaOrder) {
+        if (phoneInput.trim()) {
+          const cleanQueryPhone = phoneInput.replace(/[^0-9]/g, '');
+          const cleanOrderPhone = (supaOrder.customer?.phone || '').replace(/[^0-9]/g, '');
+          if (
+            cleanQueryPhone &&
+            cleanOrderPhone &&
+            !cleanOrderPhone.includes(cleanQueryPhone) &&
+            !cleanQueryPhone.includes(cleanOrderPhone)
+          ) {
+            throw new Error('Phone number does not match order records.');
+          }
+        }
+        setOrder(supaOrder);
+        setLoading(false);
+        return;
+      }
+
       const url = `/api/orders/track/${encodeURIComponent(orderNumberInput.trim())}${
         phoneInput.trim() ? `?phone=${encodeURIComponent(phoneInput.trim())}` : ''
       }`;
-      const res = await fetch(url);
+      const res = await fetch(url, { cache: 'no-store' });
       const data = await safeJsonResponse(res, { error: 'Order not found.' });
 
       if (!res.ok || data.error) {

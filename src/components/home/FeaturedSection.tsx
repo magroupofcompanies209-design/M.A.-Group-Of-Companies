@@ -5,19 +5,27 @@ import { Flame, Sparkles, TrendingUp, Sun, ArrowRight } from 'lucide-react';
 
 export const FeaturedSection: React.FC = () => {
   const { products, navigate } = useStore();
-  const [activeTab, setActiveTab] = useState<'deals' | 'bestsellers' | 'solar' | 'new'>('deals');
+  const [activeTab, setActiveTab] = useState<'new' | 'deals' | 'bestsellers' | 'solar'>('new');
 
-  // Filter products based on active tab (only active storefront products)
-  const activeProducts = products.filter((p) => p.status !== 'archived' && p.status !== 'inactive' && !p.isArchived);
+  // Filter products based on active tab (only active storefront products, newest first)
+  const activeProducts = [...products]
+    .filter((p) => p.status !== 'archived' && p.status !== 'inactive' && !p.isArchived)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
   let filtered = activeProducts;
   if (activeTab === 'deals') {
     filtered = activeProducts.filter((p) => p.isDeal || (p.salePrice && p.salePrice < p.price));
   } else if (activeTab === 'bestsellers') {
     filtered = activeProducts.filter((p) => p.isBestSeller || p.isFeatured);
   } else if (activeTab === 'solar') {
-    filtered = activeProducts.filter((p) => p.categoryId === 'cat-solar');
+    filtered = activeProducts.filter(
+      (p) =>
+        p.categoryId === 'cat-solar' ||
+        (p.categoryName && p.categoryName.toLowerCase().includes('solar'))
+    );
   } else if (activeTab === 'new') {
-    filtered = activeProducts.filter((p) => p.isNewArrival);
+    // Show all active products sorted by newest created_at first so newly added Admin products appear immediately
+    filtered = activeProducts;
   }
 
   // Fallback if empty
