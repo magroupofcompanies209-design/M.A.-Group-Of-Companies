@@ -255,12 +255,27 @@ export const AdminDashboard: React.FC = () => {
               .then((r) => safeJsonResponse(r, []))
               .catch(() => []);
             if (Array.isArray(supaOrders) && supaOrders.length > 0) {
-              // Merge any orders if needed, prioritizing Supabase
+              // Merge any orders if needed, prioritizing Supabase and deduplicating by id & orderNumber
               const byId = new Map<string, Order>();
+              const orderNumToId = new Map<string, string>();
               if (Array.isArray(apiOrders)) {
-                apiOrders.forEach((o: Order) => byId.set(o.id, o));
+                apiOrders.forEach((o: Order) => {
+                  if (!o || !o.id) return;
+                  const normNum = (o.orderNumber || o.id).toLowerCase();
+                  byId.set(o.id, o);
+                  orderNumToId.set(normNum, o.id);
+                });
               }
-              supaOrders.forEach((o: Order) => byId.set(o.id, o));
+              supaOrders.forEach((o: Order) => {
+                if (!o || !o.id) return;
+                const normNum = (o.orderNumber || o.id).toLowerCase();
+                const existingId = orderNumToId.get(normNum);
+                if (existingId && existingId !== o.id) {
+                  byId.delete(existingId);
+                }
+                byId.set(o.id, o);
+                orderNumToId.set(normNum, o.id);
+              });
               return Array.from(byId.values()).sort(
                 (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
               );
@@ -3535,7 +3550,61 @@ export const AdminDashboard: React.FC = () => {
 
             <form onSubmit={handleSaveProduct} className="space-y-3">
               <div className="space-y-1">
-                <label className="font-bold text-neutral-300">Product Title</label>
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-neutral-300">Product Title</label>
+                  <button
+                    type="button"
+                    disabled={aiLoading || !editingProduct.name?.trim()}
+                    onClick={async () => {
+                      if (!editingProduct.name?.trim()) {
+                        showToast('Enter a Product Title first to generate AI details.', 'info');
+                        return;
+                      }
+                      setAiLoading(true);
+                      try {
+                        const selCat = categories.find((c) => c.id === editingProduct.categoryId);
+                        const res = await adminFetch('/api/ai/product-autofill', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            name: editingProduct.name,
+                            categoryName: selCat?.name || editingProduct.categoryName || '',
+                            price: editingProduct.price,
+                            brand: editingProduct.brand,
+                          }),
+                        });
+                        const data = await safeJsonResponse(res, { success: false });
+                        if (res.ok && data.success && data.draft) {
+                          setEditingProduct((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  description: data.draft.description || prev.description,
+                                  shortDescription: data.draft.shortDescription || prev.shortDescription,
+                                  warranty: data.draft.warranty || prev.warranty,
+                                  brand: data.draft.brand || prev.brand,
+                                  features: Array.isArray(data.draft.features) && data.draft.features.length > 0 ? data.draft.features : prev.features,
+                                  specifications: Array.isArray(data.draft.specifications) && data.draft.specifications.length > 0 ? data.draft.specifications : prev.specifications,
+                                  tags: Array.isArray(data.draft.tags) && data.draft.tags.length > 0 ? data.draft.tags : prev.tags,
+                                }
+                              : null
+                          );
+                          showToast('AI generated description, warranty, features & specs!', 'success');
+                        } else {
+                          showToast(data.error || 'Could not generate AI product details.', 'error');
+                        }
+                      } catch {
+                        showToast('AI autofill error.', 'error');
+                      } finally {
+                        setAiLoading(false);
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-400 font-bold text-[11px] flex items-center gap-1.5 cursor-pointer disabled:opacity-40 transition-colors"
+                  >
+                    {aiLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                    <span>{aiLoading ? 'AI Generating...' : 'AI Autofill Details & Specs'}</span>
+                  </button>
+                </div>
                 <input
                   type="text"
                   required

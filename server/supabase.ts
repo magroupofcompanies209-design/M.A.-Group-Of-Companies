@@ -511,27 +511,66 @@ export async function fetchAllSupabaseProducts(): Promise<Product[] | null> {
   if (!sb) return null;
   try {
     let sqlProducts: Product[] = [];
+    let sqlTableAvailable = false;
     const { data, error } = await sb
       .from('products')
       .select('*')
       .order('created_at', { ascending: false });
     if (!error && data) {
+      sqlTableAvailable = true;
       sqlProducts = data.map(mapSupabaseRowToProduct);
     } else if (error && !isTableMissingError(error.message)) {
       console.error('[Server Supabase][Table:products][Op:SELECT] Error:', error.message);
       const { data: fbData, error: fbErr } = await sb.from('products').select('*');
       if (!fbErr && fbData) {
+        sqlTableAvailable = true;
         sqlProducts = fbData.map(mapSupabaseRowToProduct);
       }
     }
+
     const cloudProducts = await readCloudTable<Product>('products');
-    if (sqlProducts.length > 0 || (cloudProducts && cloudProducts.length > 0)) {
-      const mergedMap = new Map<string, Product>();
-      if (cloudProducts) cloudProducts.forEach((p) => mergedMap.set(p.id, p));
-      sqlProducts.forEach((p) => mergedMap.set(p.id, p));
-      return Array.from(mergedMap.values());
+
+    // If the relational SQL table is active and has rows, merge any cloud-only metadata for matching IDs
+    // or if SQL table is empty AND cloudProducts exists, only use cloudProducts when SQL table is missing
+    if (sqlTableAvailable) {
+      if (sqlProducts.length > 0) {
+        const cloudById = new Map<string, Product>();
+        if (cloudProducts) {
+          cloudProducts.forEach((p) => {
+            if (p && p.id) cloudById.set(p.id, mapSupabaseRowToProduct(p));
+          });
+        }
+        const mergedMap = new Map<string, Product>();
+        sqlProducts.forEach((sqlProd) => {
+          const cloudMatch = cloudById.get(sqlProd.id);
+          // SQL row takes precedence over cloud backup, while preserving any extra fields from cloud backup
+          mergedMap.set(sqlProd.id, cloudMatch ? { ...cloudMatch, ...sqlProd } : sqlProd);
+        });
+        // Also include any products saved to Cloud Storage when SQL insert fell back
+        if (cloudProducts) {
+          cloudProducts.forEach((cp) => {
+            if (cp && cp.id && !mergedMap.has(cp.id)) {
+              mergedMap.set(cp.id, mapSupabaseRowToProduct(cp));
+            }
+          });
+        }
+        return Array.from(mergedMap.values());
+      }
+      // SQL table exists and returned 0 rows; return cloudProducts if present, else []
+      if (cloudProducts && cloudProducts.length > 0) {
+        return cloudProducts.map(mapSupabaseRowToProduct);
+      }
+      return [];
     }
-    return sqlProducts;
+
+    if (cloudProducts) {
+      const seen = new Map<string, Product>();
+      for (const p of cloudProducts) {
+        if (p && p.id) seen.set(p.id, mapSupabaseRowToProduct(p));
+      }
+      return Array.from(seen.values());
+    }
+    return null;
   } catch (err: any) {
     console.error('[Server Supabase][Table:products][Op:SELECT] Exception:', err?.message);
     return await readCloudTable<Product>('products');
@@ -557,17 +596,21 @@ export async function upsertSupabaseProduct(
     updatedAt: new Date().toISOString(),
   };
 
+  const syncToCloudBackup = async (savedProd: Product) => {
+    const existingCloud = (await readCloudTable<Product>('products')) || fallbackCurrentList || [];
+    const filtered = existingCloud.filter(
+      (p) => p && p.id !== savedProd.id && p.id !== normalizedProduct.id
+    );
+    filtered.unshift(savedProd);
+    return await writeCloudTable('products', filtered);
+  };
+
   try {
     const row = mapProductToSupabaseRow(normalizedProduct);
     const { data, error } = await sb.from('products').upsert(row, { onConflict: 'id' }).select('*').maybeSingle();
     if (!error) {
-      const saved = data ? mapSupabaseRowToProduct(data) : normalizedProduct;
-      // Also mirror to cloud table for backup
-      const existingCloud = (await readCloudTable<Product>('products')) || fallbackCurrentList || [];
-      const idx = existingCloud.findIndex((p) => p.id === saved.id);
-      if (idx > -1) existingCloud[idx] = saved;
-      else existingCloud.unshift(saved);
-      await writeCloudTable('products', existingCloud);
+      const saved = data ? { ...normalizedProduct, ...mapSupabaseRowToProduct(data) } : normalizedProduct;
+      await syncToCloudBackup(saved);
       return { ok: true, product: saved };
     }
 
@@ -575,7 +618,9 @@ export async function upsertSupabaseProduct(
       const coreWithId = mapProductToCoreSupabaseRow(normalizedProduct, true);
       const { data: fb1Data, error: fb1Err } = await sb.from('products').upsert(coreWithId, { onConflict: 'id' }).select('*').maybeSingle();
       if (!fb1Err) {
-        return { ok: true, product: fb1Data ? mapSupabaseRowToProduct(fb1Data) : normalizedProduct };
+        const saved = fb1Data ? { ...normalizedProduct, ...mapSupabaseRowToProduct(fb1Data) } : normalizedProduct;
+        await syncToCloudBackup(saved);
+        return { ok: true, product: saved };
       }
       const coreWithoutId = mapProductToCoreSupabaseRow(normalizedProduct, false);
       if (normalizedProduct.id) {
@@ -583,25 +628,22 @@ export async function upsertSupabaseProduct(
         if (existingRows && existingRows.length > 0) {
           const { data: updData, error: updErr } = await sb.from('products').update(coreWithoutId).eq('id', normalizedProduct.id).select('*').maybeSingle();
           if (!updErr) {
-            return { ok: true, product: updData ? mapSupabaseRowToProduct(updData) : normalizedProduct };
+            const saved = updData ? { ...normalizedProduct, ...mapSupabaseRowToProduct(updData) } : normalizedProduct;
+            await syncToCloudBackup(saved);
+            return { ok: true, product: saved };
           }
         }
       }
       const { data: insData, error: insErr } = await sb.from('products').insert(coreWithoutId).select('*').maybeSingle();
       if (!insErr) {
-        return { ok: true, product: insData ? mapSupabaseRowToProduct(insData) : normalizedProduct };
+        const saved = insData ? { ...normalizedProduct, ...mapSupabaseRowToProduct(insData) } : normalizedProduct;
+        await syncToCloudBackup(saved);
+        return { ok: true, product: saved };
       }
     }
 
     // Persist to Supabase Cloud Bucket (`ma-group-database/products.json`)
-    const currentList = (await readCloudTable<Product>('products')) || fallbackCurrentList || [];
-    const idx = currentList.findIndex((p) => p.id === normalizedProduct.id);
-    if (idx > -1) {
-      currentList[idx] = normalizedProduct;
-    } else {
-      currentList.unshift(normalizedProduct);
-    }
-    const cloudWrite = await writeCloudTable('products', currentList);
+    const cloudWrite = await syncToCloudBackup(normalizedProduct);
     if (!cloudWrite.ok) {
       return { ok: false, error: cloudWrite.error || error.message };
     }
@@ -768,8 +810,25 @@ export async function fetchAllSupabaseOrders(): Promise<Order[] | null> {
     const cloudOrders = await readCloudTable<Order>('orders');
     if (sqlOrders.length > 0 || (cloudOrders && cloudOrders.length > 0)) {
       const mergedMap = new Map<string, Order>();
-      if (cloudOrders) cloudOrders.forEach((o) => mergedMap.set(o.id, o));
-      sqlOrders.forEach((o) => mergedMap.set(o.id, o));
+      const orderNumToId = new Map<string, string>();
+      if (cloudOrders) {
+        cloudOrders.forEach((o) => {
+          if (!o || !o.id) return;
+          const normNum = (o.orderNumber || o.id).toLowerCase();
+          mergedMap.set(o.id, o);
+          orderNumToId.set(normNum, o.id);
+        });
+      }
+      sqlOrders.forEach((o) => {
+        if (!o || !o.id) return;
+        const normNum = (o.orderNumber || o.id).toLowerCase();
+        const existingId = orderNumToId.get(normNum);
+        if (existingId && existingId !== o.id) {
+          mergedMap.delete(existingId);
+        }
+        mergedMap.set(o.id, o);
+        orderNumToId.set(normNum, o.id);
+      });
       return Array.from(mergedMap.values()).sort(
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );

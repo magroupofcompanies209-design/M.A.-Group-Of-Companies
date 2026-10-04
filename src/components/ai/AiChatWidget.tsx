@@ -89,12 +89,14 @@ export const AiChatWidget: React.FC = () => {
 
       const data = await safeJsonResponse(res, {
         reply: "I'm here to help with all M.A. GROUP OF COMPANIES products across Pakistan. Please let me know your specifications!",
+        recommendedProductIds: [] as string[],
       });
       const replyText = data.reply || "I'm here to help with all M.A. GROUP OF COMPANIES products across Pakistan. Please let me know your specifications!";
 
-      // Extract matching products mentioned in reply or query
+      // Combine server-grounded recommendedProductIds with local SKU/brand matching
+      const serverRecIds: string[] = Array.isArray(data.recommendedProductIds) ? data.recommendedProductIds : [];
       const matched = products.filter((p) => {
-        const titleLower = p.name.toLowerCase();
+        if (serverRecIds.includes(p.id)) return true;
         const queryLower = query.toLowerCase();
         const replyLower = replyText.toLowerCase();
         return (
@@ -102,7 +104,7 @@ export const AiChatWidget: React.FC = () => {
           queryLower.includes(p.sku.toLowerCase()) ||
           (replyLower.includes(p.brand.toLowerCase()) && replyLower.includes(p.categoryName.toLowerCase()))
         );
-      }).slice(0, 2);
+      }).slice(0, 3);
 
       const assistantMsg: ChatMessage = {
         id: 'bot-' + Date.now(),

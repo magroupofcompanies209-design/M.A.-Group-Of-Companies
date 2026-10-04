@@ -534,26 +534,56 @@ export async function fetchProductsFromSupabase(): Promise<Product[]> {
     }
   }
 
-  // Merge SQL products and Cloud Bucket products from the same Supabase project
-  if (sqlProducts.length > 0 || cloudProducts.length > 0) {
-    const mergedMap = new Map<string, Product>();
-    cloudProducts.forEach((p) => mergedMap.set(p.id, p));
-    sqlProducts.forEach((p) => mergedMap.set(p.id, p));
-    return Array.from(mergedMap.values());
+  // 3. Query unified backend API (which connects to the same Supabase project via SUPABASE_SERVICE_ROLE_KEY)
+  // and merge with any direct client rows without duplication
+  try {
+    const res = await fetch(`/api/products?_t=${Date.now()}`, {
+      headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+      cache: 'no-store',
+    });
+    if (res.ok) {
+      const apiData = await res.json();
+      if (Array.isArray(apiData)) {
+        // When the backend API returns authoritative Supabase-hydrated data, merge with direct SQL rows
+        // (giving SQL and backend API priority over any cached Cloud Bucket snapshot)
+        const mergedMap = new Map<string, Product>();
+        apiData.forEach((p: Product) => {
+          if (p && p.id) mergedMap.set(p.id, mapSupabaseRowToProduct(p));
+        });
+        sqlProducts.forEach((p) => {
+          if (p && p.id) {
+            const existing = mergedMap.get(p.id);
+            mergedMap.set(p.id, existing ? { ...existing, ...p } : p);
+          }
+        });
+        if (mergedMap.size > 0 || (sqlProducts.length === 0 && cloudProducts.length === 0)) {
+          return Array.from(mergedMap.values());
+        }
+      }
+    } else if (sqlProducts.length === 0 && cloudProducts.length === 0) {
+      const errBody = await res.json().catch(() => ({}));
+      const errMsg = errBody?.error || `Failed to load products from Supabase (${res.status})`;
+      logSupabaseOp('products', 'API_SELECT', 'ERROR', errMsg);
+      throw new Error(errMsg);
+    }
+  } catch (err: any) {
+    if (sqlProducts.length === 0 && cloudProducts.length === 0) {
+      throw err;
+    }
   }
 
-  // 3. Also query unified backend API (which connects to the same Supabase project via SUPABASE_SERVICE_ROLE_KEY)
-  const res = await fetch(`/api/products?_t=${Date.now()}`, {
-    headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+  // Merge SQL products and Cloud Bucket products from the same Supabase project
+  const mergedMap = new Map<string, Product>();
+  cloudProducts.forEach((p) => {
+    if (p && p.id) mergedMap.set(p.id, p);
   });
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    const errMsg = errBody?.error || `Failed to load products from Supabase (${res.status})`;
-    logSupabaseOp('products', 'API_SELECT', 'ERROR', errMsg);
-    throw new Error(errMsg);
-  }
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
+  sqlProducts.forEach((p) => {
+    if (p && p.id) {
+      const existing = mergedMap.get(p.id);
+      mergedMap.set(p.id, existing ? { ...existing, ...p } : p);
+    }
+  });
+  return Array.from(mergedMap.values());
 }
 
 export async function insertOrUpdateProductInSupabase(
@@ -691,24 +721,37 @@ export async function fetchCategoriesFromSupabase(): Promise<Category[]> {
     }
   }
 
-  if (sqlCats.length > 0 || cloudCats.length > 0) {
-    const mergedMap = new Map<string, Category>();
-    cloudCats.forEach((c) => mergedMap.set(c.id, c));
-    sqlCats.forEach((c) => mergedMap.set(c.id, c));
-    return Array.from(mergedMap.values());
+  try {
+    const res = await fetch(`/api/categories?_t=${Date.now()}`, {
+      headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+    });
+    if (res.ok) {
+      const apiData = await res.json();
+      if (Array.isArray(apiData) && apiData.length > 0) {
+        const mergedMap = new Map<string, Category>();
+        apiData.forEach((c: Category) => {
+          if (c && c.id) mergedMap.set(c.id, mapSupabaseRowToCategory(c));
+        });
+        cloudCats.forEach((c) => mergedMap.set(c.id, c));
+        sqlCats.forEach((c) => mergedMap.set(c.id, c));
+        return Array.from(mergedMap.values());
+      }
+    } else if (sqlCats.length === 0 && cloudCats.length === 0) {
+      const errBody = await res.json().catch(() => ({}));
+      const errMsg = errBody?.error || `Failed to load categories from Supabase (${res.status})`;
+      logSupabaseOp('categories', 'API_SELECT', 'ERROR', errMsg);
+      throw new Error(errMsg);
+    }
+  } catch (err: any) {
+    if (sqlCats.length === 0 && cloudCats.length === 0) {
+      throw err;
+    }
   }
 
-  const res = await fetch(`/api/categories?_t=${Date.now()}`, {
-    headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
-  });
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    const errMsg = errBody?.error || `Failed to load categories from Supabase (${res.status})`;
-    logSupabaseOp('categories', 'API_SELECT', 'ERROR', errMsg);
-    throw new Error(errMsg);
-  }
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
+  const mergedMap = new Map<string, Category>();
+  cloudCats.forEach((c) => mergedMap.set(c.id, c));
+  sqlCats.forEach((c) => mergedMap.set(c.id, c));
+  return Array.from(mergedMap.values());
 }
 
 export async function insertOrUpdateCategoryInSupabase(

@@ -1074,8 +1074,14 @@ class DatabaseService {
   }
 
   public syncProducts(products: Product[]): void {
-    if (Array.isArray(products) && products.length > 0) {
-      this.data.products = products;
+    if (Array.isArray(products)) {
+      const seen = new Map<string, Product>();
+      for (const p of products) {
+        if (p && p.id && !seen.has(p.id)) {
+          seen.set(p.id, p);
+        }
+      }
+      this.data.products = Array.from(seen.values());
       this.saveToFile(this.data);
     }
   }
@@ -1085,7 +1091,12 @@ class DatabaseService {
   }
 
   public createProduct(product: Product): Product {
-    this.data.products.unshift(product);
+    const existingIdx = this.data.products.findIndex((p) => p.id === product.id);
+    if (existingIdx > -1) {
+      this.data.products[existingIdx] = product;
+    } else {
+      this.data.products.unshift(product);
+    }
     this.saveData(this.data);
     postgresManager.saveProduct(product).catch(() => {});
     return product;
@@ -1121,8 +1132,14 @@ class DatabaseService {
   }
 
   public syncCategories(categories: Category[]): void {
-    if (Array.isArray(categories) && categories.length > 0) {
-      this.data.categories = categories;
+    if (Array.isArray(categories)) {
+      const seen = new Map<string, Category>();
+      for (const c of categories) {
+        if (c && c.id && !seen.has(c.id)) {
+          seen.set(c.id, c);
+        }
+      }
+      this.data.categories = Array.from(seen.values());
       this.saveToFile(this.data);
     }
   }
@@ -1132,7 +1149,12 @@ class DatabaseService {
   }
 
   public createCategory(category: Category): Category {
-    this.data.categories.push(category);
+    const existingIdx = this.data.categories.findIndex((c) => c.id === category.id);
+    if (existingIdx > -1) {
+      this.data.categories[existingIdx] = category;
+    } else {
+      this.data.categories.push(category);
+    }
     this.saveData(this.data);
     return category;
   }
@@ -1183,7 +1205,18 @@ class DatabaseService {
 
   public syncOrders(orders: Order[]): void {
     if (Array.isArray(orders)) {
-      this.data.orders = orders;
+      const seenIds = new Set<string>();
+      const seenOrderNumbers = new Set<string>();
+      const deduped: Order[] = [];
+      for (const o of orders) {
+        if (!o || !o.id) continue;
+        const normNum = (o.orderNumber || o.id).toLowerCase();
+        if (seenIds.has(o.id) || seenOrderNumbers.has(normNum)) continue;
+        seenIds.add(o.id);
+        seenOrderNumbers.add(normNum);
+        deduped.push(o);
+      }
+      this.data.orders = deduped;
       this.saveToFile(this.data);
     }
   }
@@ -1253,6 +1286,16 @@ class DatabaseService {
       order.riskLevel = evalResult.riskLevel;
       order.riskReasons = evalResult.riskReasons;
       order.isRiskReviewed = false;
+    }
+
+    const existingIdx = this.data.orders.findIndex(
+      (o) => o.id === order.id || (order.orderNumber && o.orderNumber.toLowerCase() === order.orderNumber.toLowerCase())
+    );
+    if (existingIdx > -1) {
+      this.data.orders[existingIdx] = order;
+      this.saveData(this.data);
+      postgresManager.saveOrder(order).catch(() => {});
+      return order;
     }
 
     this.data.orders.unshift(order);

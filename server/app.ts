@@ -15,7 +15,7 @@ import {
   requireSuperAdminAuth,
   requireRole,
 } from './auth.ts';
-import { askShoppingAssistant, generateAdminCopy } from './gemini.ts';
+import { askShoppingAssistant, generateAdminCopy, generateProductDetailsWithAi, generateInvoiceAiSummary } from './gemini.ts';
 import { supabaseService } from './supabase.ts';
 import type { Order, OrderStatus, Product, ProductStatus, AdminRole } from '../src/types/index.ts';
 
@@ -256,23 +256,47 @@ app.delete('/api/admin/security/staff/:id', requireSuperAdminAuth, (req: Request
 // 2. PRODUCTS API (Supabase Persistent Database)
 // ==========================================
 
-// GET /api/products
-app.get('/api/products', async (req: Request, res: Response) => {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  let products: Product[] = [];
-
-  // 1. Fetch directly from Supabase if configured (single source of truth)
+/**
+ * Helper to query the Supabase `products` table (and Cloud Storage backup)
+ * and hydrate `db.ts` local state without duplication.
+ */
+async function hydrateProductsFromSupabase(): Promise<Product[]> {
   if (supabaseService.isConfigured()) {
     try {
       const supaProducts = await supabaseService.getProducts(db.getProducts());
       if (supaProducts !== null) {
-        products = supaProducts;
-        db.syncProducts(supaProducts);
+        if (supaProducts.length > 0 || db.getProducts().length === 0) {
+          db.syncProducts(supaProducts);
+        }
+        return supaProducts;
       }
     } catch (err) {
       console.warn('Supabase fetch error, falling back to local store:', err);
     }
   }
+  return db.getProducts();
+}
+
+async function hydrateCategoriesFromSupabase() {
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaCats = await supabaseService.getCategories();
+      if (supaCats !== null) {
+        if (supaCats.length > 0 || db.getCategories().length === 0) {
+          db.syncCategories(supaCats);
+        }
+      }
+    } catch (err) {
+      console.warn('Supabase categories fetch error:', err);
+    }
+  }
+  return db.getCategories();
+}
+
+// GET /api/products
+app.get('/api/products', async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  let products = await hydrateProductsFromSupabase();
 
   // 2. Fallback to local store only if Supabase is not configured
   if (products.length === 0 && !supabaseService.isConfigured()) {
@@ -357,17 +381,8 @@ app.get('/api/products', async (req: Request, res: Response) => {
 // GET /api/products/:id
 app.get('/api/products/:id', async (req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  if (supabaseService.isConfigured()) {
-    try {
-      const supaProducts = await supabaseService.getProducts();
-      if (supaProducts !== null) {
-        db.syncProducts(supaProducts);
-      }
-    } catch {
-      // ignore
-    }
-  }
-  const product = db.getProductById(req.params.id);
+  await hydrateProductsFromSupabase();
+  const product = db.getProductById(req.params.id) || db.getProductBySlug(req.params.id);
   if (!product) {
     return res.status(404).json({ error: 'Product not found' });
   }
@@ -385,6 +400,9 @@ app.get('/api/products/:id', async (req: Request, res: Response) => {
 
 // POST /api/products (Admin Protected - Persists directly to Supabase)
 app.post('/api/products', requireAdminAuth, async (req: Request, res: Response) => {
+  await hydrateCategoriesFromSupabase();
+  await hydrateProductsFromSupabase();
+
   const { name, price, stock, categoryName, categoryId } = req.body;
 
   // Validation
@@ -448,8 +466,16 @@ app.post('/api/products', requireAdminAuth, async (req: Request, res: Response) 
     });
   }
 
-  const savedProduct = supaRes.data || newProduct;
+  let savedProduct = supaRes.data || newProduct;
   db.createProduct(savedProduct);
+
+  // Re-query Supabase `products` table and hydrate `db.ts` local state after mutation
+  const freshProducts = await supabaseService.getProducts();
+  if (freshProducts !== null) {
+    db.syncProducts(freshProducts);
+    savedProduct = db.getProductById(savedProduct.id) || savedProduct;
+  }
+
   db.logAction('CREATE_PRODUCT', (req as any).adminSession.username, `Created product in Supabase: ${savedProduct.name} (${savedProduct.sku})`);
   return res.status(201).json(savedProduct);
 });
@@ -465,14 +491,8 @@ app.put('/api/products/:id', requireAdminAuth, async (req: Request, res: Respons
     });
   }
 
-  try {
-    const supaProducts = await supabaseService.getProducts();
-    if (supaProducts && supaProducts.length > 0) {
-      db.syncProducts(supaProducts);
-    }
-  } catch {
-    // ignore
-  }
+  await hydrateCategoriesFromSupabase();
+  await hydrateProductsFromSupabase();
 
   const existingProduct = db.getProductById(id);
   const oldImages = existingProduct?.images || (existingProduct?.imageUrl ? [existingProduct.imageUrl] : []);
@@ -485,7 +505,17 @@ app.put('/api/products/:id', requireAdminAuth, async (req: Request, res: Respons
     });
   }
 
-  const updated = db.updateProduct(id, req.body);
+  let updated = db.updateProduct(id, req.body);
+  if (supaRes.data) {
+    updated = db.createProduct(supaRes.data);
+  }
+
+  // Re-query Supabase `products` table and hydrate `db.ts` local state after mutation
+  const freshProducts = await supabaseService.getProducts();
+  if (freshProducts !== null) {
+    db.syncProducts(freshProducts);
+    updated = db.getProductById(id) || updated;
+  }
 
   const newImages = req.body.images || (req.body.imageUrl || req.body.image_url ? [req.body.imageUrl || req.body.image_url] : []);
   for (const oldImg of oldImages) {
@@ -500,7 +530,7 @@ app.put('/api/products/:id', requireAdminAuth, async (req: Request, res: Respons
   }
 
   db.logAction('UPDATE_PRODUCT', (req as any).adminSession.username, `Updated product: ${id}`);
-  return res.json(supaRes.data || updated);
+  return res.json(updated || supaRes.data);
 });
 
 // DELETE /api/products/:id (Admin/Superadmin Protected - Manager/Staff cannot delete products)
@@ -509,6 +539,8 @@ app.delete('/api/products/:id', requireRole(['superadmin', 'admin']), async (req
   if (!id) {
     return res.status(400).json({ success: false, error: 'Product ID is required.' });
   }
+
+  await hydrateProductsFromSupabase();
 
   const existingProduct = db.getProductById(id);
   if (!existingProduct && !supabaseService.isConfigured()) {
@@ -526,11 +558,13 @@ app.delete('/api/products/:id', requireRole(['superadmin', 'admin']), async (req
   if (shouldArchive) {
     const updates = { status: 'archived' as const, isArchived: true };
     if (supabaseService.isConfigured()) {
-      await supabaseService.updateProduct(id, updates);
+      await supabaseService.updateProduct(id, updates, existingProduct, db.getProducts());
+      const freshProducts = await supabaseService.getProducts();
+      if (freshProducts !== null) db.syncProducts(freshProducts);
     }
     const archived = db.updateProduct(id, updates);
     db.logAction('ARCHIVE_PRODUCT', (req as any).adminSession.username, `Archived product: ${existingProduct?.name || id}`);
-    return res.json({ success: true, archived: true, message: 'Product archived successfully. Historical orders preserved.' });
+    return res.json({ success: true, archived: true, product: archived, message: 'Product archived successfully. Historical orders preserved.' });
   }
 
   if (referencedOrders.length > 0 && !force) {
@@ -547,7 +581,8 @@ app.delete('/api/products/:id', requireRole(['superadmin', 'admin']), async (req
   const existingImages = existingProduct?.images || (existingProduct?.imageUrl ? [existingProduct.imageUrl] : []);
 
   if (supabaseService.isConfigured()) {
-    const supaRes = await supabaseService.deleteProduct(id);
+    const remainingFallback = db.getProducts().filter((p) => p.id !== id);
+    const supaRes = await supabaseService.deleteProduct(id, remainingFallback);
     if (!supaRes.success && !supaRes.tableMissing) {
       return res.status(500).json({
         success: false,
@@ -556,6 +591,12 @@ app.delete('/api/products/:id', requireRole(['superadmin', 'admin']), async (req
     }
 
     db.deleteProduct(id);
+
+    // Re-query Supabase `products` table and hydrate `db.ts` local state after deletion
+    const freshProducts = await supabaseService.getProducts();
+    if (freshProducts !== null) {
+      db.syncProducts(freshProducts);
+    }
 
     // Requirement: Remove image from Supabase Storage when appropriate, ensuring no other product uses it
     for (const img of existingImages) {
@@ -585,6 +626,7 @@ app.delete('/api/products/:id', requireRole(['superadmin', 'admin']), async (req
 // POST /api/products/:id/duplicate (Duplicate product with new SKU and Copy name)
 app.post('/api/products/:id/duplicate', requireRole(['superadmin', 'admin', 'manager']), async (req: Request, res: Response) => {
   const id = req.params.id;
+  await hydrateProductsFromSupabase();
   const existing = db.getProductById(id);
   if (!existing) {
     return res.status(404).json({ success: false, error: 'Product not found to duplicate.' });
@@ -604,11 +646,20 @@ app.post('/api/products/:id/duplicate', requireRole(['superadmin', 'admin', 'man
     updatedAt: new Date().toISOString(),
   };
 
+  let created = db.createProduct(duplicated);
   if (supabaseService.isConfigured()) {
-    await supabaseService.insertProduct(duplicated);
+    const supaRes = await supabaseService.insertProduct(created, db.getProducts());
+    if (!supaRes.success) {
+      db.deleteProduct(created.id);
+      return res.status(500).json({ success: false, error: supaRes.error || 'Failed to duplicate product in Supabase.' });
+    }
+    const freshProducts = await supabaseService.getProducts();
+    if (freshProducts !== null) {
+      db.syncProducts(freshProducts);
+      created = db.getProductById(newId) || created;
+    }
   }
 
-  const created = db.createProduct(duplicated);
   db.logAction('DUPLICATE_PRODUCT', (req as any).adminSession.username, `Duplicated product ${existing.name} into ${created.name} (${created.sku})`);
   return res.status(201).json(created);
 });
@@ -616,6 +667,7 @@ app.post('/api/products/:id/duplicate', requireRole(['superadmin', 'admin', 'man
 // POST /api/products/:id/archive (Safely archive a product)
 app.post('/api/products/:id/archive', requireRole(['superadmin', 'admin', 'manager']), async (req: Request, res: Response) => {
   const id = req.params.id;
+  await hydrateProductsFromSupabase();
   const existing = db.getProductById(id);
   if (!existing) {
     return res.status(404).json({ success: false, error: 'Product not found.' });
@@ -623,9 +675,16 @@ app.post('/api/products/:id/archive', requireRole(['superadmin', 'admin', 'manag
 
   const updates = { status: 'archived' as const, isArchived: true };
   if (supabaseService.isConfigured()) {
-    await supabaseService.updateProduct(id, updates);
+    await supabaseService.updateProduct(id, updates, existing, db.getProducts());
   }
-  const updated = db.updateProduct(id, updates);
+  let updated = db.updateProduct(id, updates);
+  if (supabaseService.isConfigured()) {
+    const freshProducts = await supabaseService.getProducts();
+    if (freshProducts !== null) {
+      db.syncProducts(freshProducts);
+      updated = db.getProductById(id) || updated;
+    }
+  }
   db.logAction('ARCHIVE_PRODUCT', (req as any).adminSession.username, `Archived product: ${existing.name} (${existing.sku})`);
   return res.json({ success: true, message: 'Product archived successfully.', product: updated });
 });
@@ -633,6 +692,7 @@ app.post('/api/products/:id/archive', requireRole(['superadmin', 'admin', 'manag
 // POST /api/products/:id/restore (Restore an archived product)
 app.post('/api/products/:id/restore', requireRole(['superadmin', 'admin', 'manager']), async (req: Request, res: Response) => {
   const id = req.params.id;
+  await hydrateProductsFromSupabase();
   const existing = db.getProductById(id);
   if (!existing) {
     return res.status(404).json({ success: false, error: 'Product not found.' });
@@ -640,9 +700,16 @@ app.post('/api/products/:id/restore', requireRole(['superadmin', 'admin', 'manag
 
   const updates = { status: 'active' as const, isArchived: false };
   if (supabaseService.isConfigured()) {
-    await supabaseService.updateProduct(id, updates);
+    await supabaseService.updateProduct(id, updates, existing, db.getProducts());
   }
-  const updated = db.updateProduct(id, updates);
+  let updated = db.updateProduct(id, updates);
+  if (supabaseService.isConfigured()) {
+    const freshProducts = await supabaseService.getProducts();
+    if (freshProducts !== null) {
+      db.syncProducts(freshProducts);
+      updated = db.getProductById(id) || updated;
+    }
+  }
   db.logAction('RESTORE_PRODUCT', (req as any).adminSession.username, `Restored archived product: ${existing.name} (${existing.sku})`);
   return res.json({ success: true, message: 'Product restored successfully.', product: updated });
 });
@@ -655,6 +722,7 @@ app.patch('/api/products/:id/status', requireRole(['superadmin', 'admin', 'manag
     return res.status(400).json({ success: false, error: 'Invalid product status.' });
   }
 
+  await hydrateProductsFromSupabase();
   const existing = db.getProductById(id);
   if (!existing) {
     return res.status(404).json({ success: false, error: 'Product not found.' });
@@ -666,9 +734,16 @@ app.patch('/api/products/:id/status', requireRole(['superadmin', 'admin', 'manag
   };
 
   if (supabaseService.isConfigured()) {
-    await supabaseService.updateProduct(id, updates);
+    await supabaseService.updateProduct(id, updates, existing, db.getProducts());
   }
-  const updated = db.updateProduct(id, updates);
+  let updated = db.updateProduct(id, updates);
+  if (supabaseService.isConfigured()) {
+    const freshProducts = await supabaseService.getProducts();
+    if (freshProducts !== null) {
+      db.syncProducts(freshProducts);
+      updated = db.getProductById(id) || updated;
+    }
+  }
   db.logAction('UPDATE_PRODUCT_STATUS', (req as any).adminSession.username, `Changed status of ${existing.name} to ${status}`);
   return res.json({ success: true, product: updated });
 });
@@ -1121,7 +1196,7 @@ app.post('/api/orders', async (req: Request, res: Response) => {
   }
 
   if (supabaseService.isConfigured()) {
-    const supaOrderRes = await supabaseService.insertOrder(savedOrder);
+    const supaOrderRes = await supabaseService.insertOrder(savedOrder, db.getOrders());
     if (!supaOrderRes.success && !supaOrderRes.tableMissing) {
       return res.status(500).json({
         error: supaOrderRes.error || 'Failed to save order to Supabase database.',
@@ -1131,9 +1206,16 @@ app.post('/api/orders', async (req: Request, res: Response) => {
     for (const item of items) {
       const updatedProd = db.getProductById(item.productId);
       if (updatedProd) {
-        await supabaseService.updateProduct(updatedProd.id, { stock: updatedProd.stock }, updatedProd);
+        await supabaseService.updateProduct(updatedProd.id, { stock: updatedProd.stock }, updatedProd, db.getProducts());
       }
     }
+    // Re-query and hydrate local db.ts state from Supabase after order & stock mutation
+    const [freshProducts, freshOrders] = await Promise.all([
+      supabaseService.getProducts(),
+      supabaseService.getOrders(),
+    ]);
+    if (freshProducts !== null) db.syncProducts(freshProducts);
+    if (freshOrders !== null) db.syncOrders(freshOrders);
   }
 
   db.logAction(
@@ -1260,7 +1342,7 @@ const handleAdminOrderUpdate = async (req: Request, res: Response) => {
 
   const updated = db.updateOrder(req.params.id, updates);
   if (supabaseService.isConfigured() && updated) {
-    const supaRes = await supabaseService.updateOrder(req.params.id, updates, updated);
+    const supaRes = await supabaseService.updateOrder(req.params.id, updates, updated, db.getOrders());
     if (!supaRes.success && !supaRes.tableMissing) {
       return res.status(500).json({ error: supaRes.error || 'Failed to update order in Supabase.' });
     }
@@ -1268,10 +1350,16 @@ const handleAdminOrderUpdate = async (req: Request, res: Response) => {
       for (const item of updated.items || []) {
         const prod = db.getProductById(item.productId);
         if (prod) {
-          await supabaseService.updateProduct(prod.id, { stock: prod.stock }, prod);
+          await supabaseService.updateProduct(prod.id, { stock: prod.stock }, prod, db.getProducts());
         }
       }
     }
+    const [freshOrders, freshProducts] = await Promise.all([
+      supabaseService.getOrders(),
+      supabaseService.getProducts(),
+    ]);
+    if (freshOrders !== null) db.syncOrders(freshOrders);
+    if (freshProducts !== null) db.syncProducts(freshProducts);
   }
   db.logAction(
     'UPDATE_ORDER_STATUS',
@@ -1345,10 +1433,7 @@ app.post('/api/admin/inventory/adjust', requireRole(['superadmin', 'admin', 'man
   if (!productId || typeof change !== 'number' || change === 0) {
     return res.status(400).json({ error: 'Product ID and non-zero numeric stock change are required.' });
   }
-  if (supabaseService.isConfigured()) {
-    const supaProds = await supabaseService.getProducts();
-    if (supaProds && supaProds.length > 0) db.syncProducts(supaProds);
-  }
+  await hydrateProductsFromSupabase();
   const session = (req as any).adminSession;
   const result = db.adjustStock(
     productId,
@@ -1363,9 +1448,13 @@ app.post('/api/admin/inventory/adjust', requireRole(['superadmin', 'admin', 'man
   }
   const updatedProd = db.getProductById(productId);
   if (supabaseService.isConfigured() && updatedProd) {
-    const supaRes = await supabaseService.updateProduct(productId, { stock: updatedProd.stock }, updatedProd);
+    const supaRes = await supabaseService.updateProduct(productId, { stock: updatedProd.stock }, updatedProd, db.getProducts());
     if (!supaRes.success && !supaRes.tableMissing) {
       return res.status(500).json({ error: supaRes.error || 'Failed to sync stock adjustment to Supabase.' });
+    }
+    const freshProducts = await supabaseService.getProducts();
+    if (freshProducts !== null) {
+      db.syncProducts(freshProducts);
     }
   }
   return res.json(result);
@@ -1594,7 +1683,16 @@ app.delete('/api/inquiries/:id', requireAdminAuth, (req: Request, res: Response)
 // 11. ANALYTICS & AUDIT LOGS
 // ==========================================
 
-app.get('/api/admin/analytics', requireAdminAuth, (_req: Request, res: Response) => {
+app.get('/api/admin/analytics', requireAdminAuth, async (_req: Request, res: Response) => {
+  await hydrateProductsFromSupabase();
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaOrders = await supabaseService.getOrders();
+      if (supaOrders !== null) db.syncOrders(supaOrders);
+    } catch {
+      // fallback
+    }
+  }
   const orders = db.getOrders();
   const products = db.getProducts();
 
@@ -1653,8 +1751,11 @@ app.post('/api/ai/chat', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    const reply = await askShoppingAssistant(message, history || []);
-    return res.json({ reply });
+    const result = await askShoppingAssistant(message, history || []);
+    return res.json({
+      reply: result.reply,
+      recommendedProductIds: result.recommendedProductIds,
+    });
   } catch (err: any) {
     console.error('AI chat endpoint error:', err);
     return res.status(500).json({
@@ -1675,9 +1776,103 @@ app.post('/api/ai/admin-copy', requireAdminAuth, async (req: Request, res: Respo
   }
 });
 
+// Admin AI Structured Product Autofill
+app.post('/api/ai/product-autofill', requireAdminAuth, async (req: Request, res: Response) => {
+  try {
+    const { name, categoryName, price, brand } = req.body;
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Product title is required for AI autofill.' });
+    }
+    const draft = await generateProductDetailsWithAi({ name, categoryName, price, brand });
+    return res.json({ success: true, draft });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Failed to autofill product details with AI.' });
+  }
+});
+
+// Invoice AI Summary (Thank-You Message & Personalized Energy/Product Usage Tip)
+app.post('/api/ai/invoice-summary', async (req: Request, res: Response) => {
+  try {
+    const { orderNumber, customerName, city, items, grandTotal } = req.body;
+    const summary = await generateInvoiceAiSummary({
+      orderNumber,
+      customerName,
+      city,
+      items: Array.isArray(items) ? items : [],
+      grandTotal: Number(grandTotal || 0),
+    });
+    return res.json({ success: true, summary });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to generate AI invoice summary.',
+    });
+  }
+});
+
 // ==========================================
-// 13. DATABASE STATUS & CONNECTION API
+// 13. DATABASE STATUS & SYNC AUDIT API
 // ==========================================
+
+app.get('/api/sync/audit', async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  try {
+    const supabaseStatus = supabaseService.getStatus();
+    let supaProductsCount = 0;
+    let supaCategoriesCount = 0;
+    let supaOrdersCount = 0;
+
+    if (supabaseService.isConfigured()) {
+      const [sProds, sCats, sOrds] = await Promise.all([
+        supabaseService.getProducts(),
+        supabaseService.getCategories(),
+        supabaseService.getOrders(),
+      ]);
+      if (sProds !== null) {
+        supaProductsCount = sProds.length;
+        db.syncProducts(sProds);
+      }
+      if (sCats !== null) {
+        supaCategoriesCount = sCats.length;
+        db.syncCategories(sCats);
+      }
+      if (sOrds !== null) {
+        supaOrdersCount = sOrds.length;
+        db.syncOrders(sOrds);
+      }
+    }
+
+    const localProducts = db.getProducts();
+    const localCategories = db.getCategories();
+    const localOrders = db.getOrders();
+    const uniqueProductIds = new Set(localProducts.map((p) => p.id)).size;
+    const uniqueOrderIds = new Set(localOrders.map((o) => o.id)).size;
+
+    return res.json({
+      ok: true,
+      timestamp: new Date().toISOString(),
+      supabase: supabaseStatus,
+      counts: {
+        supabaseProducts: supaProductsCount,
+        hydratedProducts: localProducts.length,
+        uniqueProducts: uniqueProductIds,
+        duplicateProducts: localProducts.length - uniqueProductIds,
+        supabaseCategories: supaCategoriesCount,
+        hydratedCategories: localCategories.length,
+        supabaseOrders: supaOrdersCount,
+        hydratedOrders: localOrders.length,
+        uniqueOrders: uniqueOrderIds,
+        duplicateOrders: localOrders.length - uniqueOrderIds,
+      },
+      aiConfigured: Boolean(process.env.GEMINI_API_KEY || process.env.AI_API_KEY),
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      ok: false,
+      error: err?.message || 'Sync audit failed',
+    });
+  }
+});
 
 app.get('/api/database/status', async (_req: Request, res: Response) => {
   try {

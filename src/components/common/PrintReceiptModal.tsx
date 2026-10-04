@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { Order } from '../../types/index.ts';
-import { Printer, X } from 'lucide-react';
+import { Printer, X, Sparkles, RefreshCw } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
+import { safeJsonResponse } from '../../utils/api';
 
 export type ReceiptFormat = 'a4' | '80mm' | '58mm';
 
@@ -11,6 +12,11 @@ interface PrintReceiptModalProps {
   initialFormat?: ReceiptFormat;
 }
 
+interface InvoiceAiSummary {
+  thankYouMessage: string;
+  energyProductUsageTip: string;
+}
+
 export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
   order,
   onClose,
@@ -18,6 +24,8 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
 }) => {
   const { settings } = useStore();
   const [format, setFormat] = useState<ReceiptFormat>(initialFormat);
+  const [aiSummary, setAiSummary] = useState<InvoiceAiSummary | null>(null);
+  const [aiLoading, setAiLoading] = useState<boolean>(false);
 
   const storeName = settings?.storeName || 'M.A. GROUP OF COMPANIES';
   const tagline = settings?.tagline || '';
@@ -27,6 +35,49 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
   const addressDisplay = settings?.headOfficeAddress || '';
   const footerNote =
     settings?.receiptFooterNote || 'Thank you for shopping with M.A. GROUP OF COMPANIES';
+
+  const generateAiSummary = async () => {
+    setAiLoading(true);
+    try {
+      const res = await fetch('/api/ai/invoice-summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderNumber: order.orderNumber || order.id,
+          customerName: order.customer?.fullName || 'Valued Customer',
+          city: order.customer?.city || 'Pakistan',
+          items: (order.items || []).map((it) => ({
+            productName: it.productName,
+            quantity: it.quantity,
+            price: it.price,
+            sku: it.sku,
+          })),
+          grandTotal: order.grandTotal,
+        }),
+      });
+      const data = await safeJsonResponse(res, { success: false });
+      if (res.ok && data?.success && data?.summary) {
+        setAiSummary(data.summary);
+        return;
+      }
+    } catch {
+      // Fallback below
+    } finally {
+      setAiLoading(false);
+    }
+
+    // Client-side fallback if offline
+    const itemsNames = (order.items || []).map((i) => i.productName).join(', ');
+    setAiSummary({
+      thankYouMessage: `Dear ${order.customer?.fullName || 'Valued Customer'}, thank you for choosing ${storeName} for your order (${itemsNames || 'Certified Equipment'}). We truly appreciate your business.`,
+      energyProductUsageTip:
+        'Ensure all equipment is installed with proper circuit protection and inspected periodically for optimal energy efficiency and extended service life.',
+    });
+  };
+
+  useEffect(() => {
+    generateAiSummary();
+  }, [order.id, order.orderNumber, JSON.stringify(order.items)]);
 
   const handlePrint = () => {
     window.print();
@@ -120,6 +171,21 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                 58mm POS
               </button>
             </div>
+
+            <button
+              type="button"
+              onClick={generateAiSummary}
+              disabled={aiLoading}
+              className="px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-amber-400 border border-amber-500/30 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+              title="Regenerate Gemini AI Summary & Energy Tip"
+            >
+              {aiLoading ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5" />
+              )}
+              <span className="hidden sm:inline">{aiLoading ? 'Generating AI...' : 'Refresh AI Tip'}</span>
+            </button>
 
             <button
               type="button"
@@ -363,6 +429,36 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                 </div>
               </div>
 
+              {/* AI Summary Section (Thank-You Message & Energy/Product Usage Tip) */}
+              <div className="mb-6 p-4 border border-neutral-400 rounded bg-neutral-50/70 space-y-2 text-xs">
+                <div className="flex items-center justify-between border-b border-neutral-300 pb-1.5">
+                  <div className="text-[11px] font-black uppercase tracking-wider text-black flex items-center gap-1.5">
+                    <span>✦ AI SUMMARY &amp; ENERGY / PRODUCT USAGE ADVISORY</span>
+                  </div>
+                  {aiLoading && (
+                    <span className="no-print text-[10px] text-neutral-500 italic">
+                      Generating personalized Gemini insight...
+                    </span>
+                  )}
+                </div>
+                {aiSummary ? (
+                  <div className="space-y-1.5 leading-relaxed">
+                    <div className="text-black">
+                      <span className="font-bold">Customer Appreciation:</span>{' '}
+                      <span>{aiSummary.thankYouMessage}</span>
+                    </div>
+                    <div className="text-black">
+                      <span className="font-bold">Energy &amp; Product Usage Tip:</span>{' '}
+                      <span>{aiSummary.energyProductUsageTip}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-neutral-600 italic text-[11px]">
+                    Preparing personalized thank-you note and energy/product usage tip for your purchased items...
+                  </div>
+                )}
+              </div>
+
               {/* Invoice Footer */}
               <div className="border-t-2 border-black pt-4 text-center space-y-1">
                 <div className="font-black text-xs uppercase tracking-wider text-black">
@@ -483,6 +579,19 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
 
               <div className="print-divider-dashed"></div>
 
+              {/* AI Summary for 80mm POS */}
+              {aiSummary && (
+                <div className="my-2 p-2 border border-black rounded-xs text-[10px] space-y-1 leading-snug">
+                  <div className="font-black uppercase tracking-wider border-b border-neutral-400 pb-0.5">
+                    AI SUMMARY &amp; USAGE TIP
+                  </div>
+                  <div>{aiSummary.thankYouMessage}</div>
+                  <div>
+                    <span className="font-bold">Tip:</span> {aiSummary.energyProductUsageTip}
+                  </div>
+                </div>
+              )}
+
               <div className="text-center text-[10px] space-y-0.5 mt-3">
                 <div className="font-bold">Thank you for shopping with</div>
                 <div className="font-black uppercase">{storeName}</div>
@@ -569,6 +678,16 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                   <span>Rs.{effectiveGrandTotal.toLocaleString()}</span>
                 </div>
               </div>
+
+              {aiSummary && (
+                <div className="my-1.5 pt-1 border-t border-dashed border-black text-[8px] space-y-0.5 font-sans leading-tight">
+                  <div className="font-bold uppercase">AI Summary &amp; Usage Tip:</div>
+                  <div>{aiSummary.thankYouMessage}</div>
+                  <div>
+                    <span className="font-bold">Tip:</span> {aiSummary.energyProductUsageTip}
+                  </div>
+                </div>
+              )}
 
               <div className="text-center text-[8px] mt-2 font-bold">
                 Thank you for shopping with {storeName}
