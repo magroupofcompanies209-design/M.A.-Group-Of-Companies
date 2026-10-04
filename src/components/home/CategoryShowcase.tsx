@@ -39,9 +39,13 @@ export const CategoryShowcase: React.FC = () => {
 
         {/* Categories Grid */}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-          {categories.map((cat) => {
-            const count = products.filter((p) => p.categoryId === cat.id).length;
-            return (
+          {categories
+            .filter((cat) => cat.isActive !== false)
+            .map((cat) => {
+              const count = products.filter(
+                (p) => p.categoryId === cat.id && p.status !== 'archived' && p.status !== 'inactive' && !p.isArchived
+              ).length;
+              return (
               <div
                 key={cat.id}
                 onClick={() => navigate('category', { slug: cat.slug })}

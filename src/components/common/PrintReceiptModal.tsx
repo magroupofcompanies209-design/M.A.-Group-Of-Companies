@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { Order } from '../../types/index.ts';
-import { Printer, X, FileText, CheckCircle2 } from 'lucide-react';
+import { Printer, X } from 'lucide-react';
 import { useStore } from '../../context/StoreContext';
 
 export type ReceiptFormat = 'a4' | '80mm' | '58mm';
@@ -20,12 +20,13 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
   const [format, setFormat] = useState<ReceiptFormat>(initialFormat);
 
   const storeName = settings?.storeName || 'M.A. GROUP OF COMPANIES';
-  const tagline = settings?.tagline || 'PREMIUM ELECTRICAL, SOLAR & HARDWARE EQUIPMENT';
+  const tagline = settings?.tagline || '';
   const logoUrl = settings?.receiptLogoUrl || '';
-  const phoneDisplay = settings?.contactPhone || '+92 300 1234567';
-  const emailDisplay = settings?.contactEmail || 'support@magroup.pk';
-  const addressDisplay = settings?.headOfficeAddress || 'Main Ferozepur Road / Showroom Hub, Lahore, Pakistan';
-  const footerNote = settings?.receiptFooterNote || 'THANK YOU FOR CHOOSING M.A. GROUP OF COMPANIES';
+  const phoneDisplay = settings?.contactPhone || '';
+  const emailDisplay = settings?.contactEmail || '';
+  const addressDisplay = settings?.headOfficeAddress || '';
+  const footerNote =
+    settings?.receiptFooterNote || 'Thank you for shopping with M.A. GROUP OF COMPANIES';
 
   const handlePrint = () => {
     window.print();
@@ -41,6 +42,24 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
     minute: '2-digit',
   });
 
+  // Always compute real-time totals from the latest saved order items if available
+  const computedSubtotal =
+    Array.isArray(order.items) && order.items.length > 0
+      ? order.items.reduce(
+          (sum, it) => sum + (Number(it.total) || Number(it.price) * Number(it.quantity) || 0),
+          0
+        )
+      : Number(order.subtotal || 0);
+  const effectiveSubtotal = Number(order.subtotal ?? computedSubtotal);
+  const effectiveDiscount = Number(order.discount ?? 0);
+  const effectiveShipping = Number(order.shippingFee ?? 0);
+  const effectiveGrandTotal = Number(
+    order.grandTotal ?? Math.max(0, effectiveSubtotal - effectiveDiscount + effectiveShipping)
+  );
+
+  // Invoice Number uses the permanent Order Number (or order.id) stored in Supabase
+  const invoiceNumber = order.orderNumber || order.id;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-2 sm:p-4 overflow-y-auto">
       {/* Container - on screen shows dark preview modal, during window.print() only .print-friendly prints */}
@@ -48,18 +67,18 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
         {/* On-screen Controls Bar (Excluded during printing via .no-print) */}
         <div className="no-print p-4 border-b border-[#1A1D23] bg-[#0B0D10] flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-blue-500/10 border border-blue-500/20 text-blue-400 flex items-center justify-center font-bold">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center font-bold">
               <Printer className="w-5 h-5" />
             </div>
             <div>
               <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
-                <span>Receipt &amp; Invoice Print Engine</span>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-mono font-semibold">
-                  {order.orderNumber}
+                <span>SALES INVOICE</span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-mono font-semibold">
+                  {invoiceNumber}
                 </span>
               </h2>
               <p className="text-xs text-[#6B7280]">
-                Authoritative Cash on Delivery receipt for standard &amp; POS thermal printers
+                A4 Printable Sales Invoice &amp; PDF Export (M.A. GROUP OF COMPANIES)
               </p>
             </div>
           </div>
@@ -72,7 +91,7 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                 onClick={() => setFormat('a4')}
                 className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
                   format === 'a4'
-                    ? 'bg-blue-600 text-white shadow-xs'
+                    ? 'bg-amber-500 text-neutral-950 shadow-xs'
                     : 'text-[#6B7280] hover:text-white'
                 }`}
               >
@@ -83,7 +102,7 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                 onClick={() => setFormat('80mm')}
                 className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
                   format === '80mm'
-                    ? 'bg-blue-600 text-white shadow-xs'
+                    ? 'bg-amber-500 text-neutral-950 shadow-xs'
                     : 'text-[#6B7280] hover:text-white'
                 }`}
               >
@@ -94,7 +113,7 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                 onClick={() => setFormat('58mm')}
                 className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
                   format === '58mm'
-                    ? 'bg-blue-600 text-white shadow-xs'
+                    ? 'bg-amber-500 text-neutral-950 shadow-xs'
                     : 'text-[#6B7280] hover:text-white'
                 }`}
               >
@@ -105,169 +124,264 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
             <button
               type="button"
               onClick={handlePrint}
-              className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-md shadow-blue-600/20"
+              className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-neutral-950 font-black text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-md"
             >
               <Printer className="w-4 h-4" />
-              <span>Print Document</span>
+              <span>PRINT INVOICE</span>
             </button>
 
             <button
               type="button"
               onClick={onClose}
               className="p-2 rounded-xl text-[#6B7280] hover:text-white hover:bg-[#1A1D23] transition-colors cursor-pointer"
-              title="Close Print Preview"
+              title="Close Invoice Preview"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        {/* Scrollable Receipt Preview Sheet */}
+        {/* Scrollable Invoice Preview Sheet */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-[#0B0D10]/80 flex justify-center">
           {/* ==============================================================
-              A4 STANDARD INVOICE TEMPLATE
+              A4 STANDARD SALES INVOICE TEMPLATE
               ============================================================== */}
           {format === 'a4' && (
             <div className="print-friendly receipt-a4 bg-white text-black p-8 rounded-lg shadow-lg border border-neutral-200">
-              {/* Header */}
-              <div className="flex justify-between items-start border-b-2 border-black pb-4 mb-6">
+              {/* Company Header & Invoice Title */}
+              <div className="flex justify-between items-start border-b-2 border-black pb-5 mb-6">
                 <div className="flex items-start gap-4">
-                  {logoUrl && (
+                  {logoUrl ? (
                     <img
                       src={logoUrl}
                       alt={storeName}
                       className="max-h-16 max-w-[140px] object-contain shrink-0"
                     />
+                  ) : (
+                    <div className="w-12 h-12 border-2 border-black flex items-center justify-center font-black text-lg tracking-tighter shrink-0">
+                      M.A
+                    </div>
                   )}
                   <div>
                     <h1 className="text-2xl font-black tracking-tight uppercase">{storeName}</h1>
-                    <p className="text-xs font-semibold text-neutral-700 tracking-wider uppercase">
-                      {tagline}
-                    </p>
-                    <p className="text-xs text-neutral-600 mt-1">
-                      Head Office: {addressDisplay}
-                    </p>
-                    <p className="text-xs text-neutral-600">
-                      Helpline: {phoneDisplay} | {emailDisplay}
-                    </p>
+                    {tagline && (
+                      <p className="text-xs font-semibold text-neutral-700 tracking-wider uppercase mt-0.5">
+                        {tagline}
+                      </p>
+                    )}
+                    {addressDisplay && (
+                      <p className="text-xs text-neutral-700 mt-1">{addressDisplay}</p>
+                    )}
+                    {(phoneDisplay || emailDisplay) && (
+                      <p className="text-xs text-neutral-700">
+                        {phoneDisplay ? `Phone: ${phoneDisplay}` : ''}
+                        {phoneDisplay && emailDisplay ? ' | ' : ''}
+                        {emailDisplay ? `Email: ${emailDisplay}` : ''}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="inline-block px-3 py-1 bg-black text-white font-mono font-bold text-xs uppercase mb-1">
-                    OFFICIAL TAX INVOICE
+                  <div className="inline-block px-3.5 py-1 bg-black text-white font-mono font-black text-sm uppercase tracking-wider mb-1.5">
+                    SALES INVOICE
                   </div>
-                  <div className="text-base font-bold font-mono">#{order.orderNumber}</div>
-                  <div className="text-xs text-neutral-600">Date: {formattedDate} {formattedTime}</div>
-                  <div className="text-xs font-bold text-black mt-1">PAYMENT: CASH ON DELIVERY</div>
+                  <div className="text-sm font-bold font-mono">
+                    Invoice / Order ID: #{invoiceNumber}
+                  </div>
+                  <div className="text-xs text-neutral-700 mt-0.5">
+                    Order Date: {formattedDate} {formattedTime}
+                  </div>
                 </div>
               </div>
 
-              {/* Customer & Shipping Details */}
+              {/* Order Information & Customer Information Grid */}
               <div className="grid grid-cols-2 gap-6 p-4 border border-neutral-300 rounded mb-6 bg-neutral-50/50">
-                <div>
-                  <div className="text-xs font-bold uppercase tracking-wider text-neutral-500 mb-1">Billed & Shipped To:</div>
-                  <div className="font-bold text-sm text-black">{order.customer.fullName}</div>
-                  <div className="text-xs text-neutral-800 font-mono mt-0.5">Phone: {order.customer.phone}</div>
-                  {order.customer.email && (
-                    <div className="text-xs text-neutral-800">Email: {order.customer.email}</div>
-                  )}
-                  <div className="text-xs text-neutral-800 mt-1">{order.customer.addressLine}</div>
-                  <div className="text-xs font-semibold text-neutral-900">{order.customer.city}, {order.customer.province || 'Pakistan'}</div>
-                </div>
-                <div>
-                  <div className="text-xs font-bold uppercase tracking-wider text-neutral-500 mb-1">Delivery Logistics:</div>
-                  <div className="text-xs text-neutral-800">
-                    <span className="font-semibold">Payment Terms:</span> Cash On Delivery (COD)
+                {/* Customer Information */}
+                <div className="space-y-1">
+                  <div className="text-[11px] font-black uppercase tracking-wider text-neutral-600 border-b border-neutral-300 pb-1 mb-1.5">
+                    CUSTOMER INFORMATION
                   </div>
-                  <div className="text-xs text-neutral-800 mt-0.5">
-                    <span className="font-semibold">Courier / Dispatch:</span> {order.courierName || 'Standard Express Delivery'}
+                  <div className="text-xs">
+                    <span className="font-bold">Customer Name:</span>{' '}
+                    <span className="font-semibold">{order.customer?.fullName || 'Guest Customer'}</span>
+                  </div>
+                  <div className="text-xs">
+                    <span className="font-bold">Phone Number:</span>{' '}
+                    <span className="font-mono">{order.customer?.phone || 'N/A'}</span>
+                  </div>
+                  {order.customer?.email && (
+                    <div className="text-xs">
+                      <span className="font-bold">Email:</span> {order.customer.email}
+                    </div>
+                  )}
+                  <div className="text-xs">
+                    <span className="font-bold">Delivery Address:</span>{' '}
+                    <span>
+                      {order.customer?.addressLine || ''}
+                      {order.customer?.city ? `, ${order.customer.city}` : ''}
+                      {order.customer?.province ? `, ${order.customer.province}` : ''}
+                    </span>
+                  </div>
+                  {order.customer?.landmark && (
+                    <div className="text-xs">
+                      <span className="font-bold">Landmark:</span> {order.customer.landmark}
+                    </div>
+                  )}
+                </div>
+
+                {/* Order Information */}
+                <div className="space-y-1">
+                  <div className="text-[11px] font-black uppercase tracking-wider text-neutral-600 border-b border-neutral-300 pb-1 mb-1.5">
+                    ORDER INFORMATION
+                  </div>
+                  <div className="text-xs">
+                    <span className="font-bold">Invoice Number / Order ID:</span>{' '}
+                    <span className="font-mono font-bold">#{invoiceNumber}</span>
+                  </div>
+                  <div className="text-xs">
+                    <span className="font-bold">Order Date:</span> {formattedDate} ({formattedTime})
+                  </div>
+                  <div className="text-xs">
+                    <span className="font-bold">Order Status:</span>{' '}
+                    <span className="font-bold uppercase">{order.status || 'Pending'}</span>
+                  </div>
+                  <div className="text-xs">
+                    <span className="font-bold">Payment Method:</span>{' '}
+                    <span className="font-bold">CASH ON DELIVERY</span>
+                  </div>
+                  <div className="text-xs">
+                    <span className="font-bold">Payment Status:</span>{' '}
+                    <span className="font-semibold">{order.paymentStatus || 'Pending (COD)'}</span>
                   </div>
                   {order.trackingNumber && (
-                    <div className="text-xs font-mono font-bold text-neutral-900 mt-0.5">
-                      Tracking ID: {order.trackingNumber}
-                    </div>
-                  )}
-                  {order.customerNotes && (
-                    <div className="text-xs italic text-neutral-700 mt-2 p-1.5 bg-neutral-100 rounded border border-neutral-200">
-                      Customer Note: &ldquo;{order.customerNotes}&rdquo;
+                    <div className="text-xs font-mono">
+                      <span className="font-bold">Tracking Number:</span> {order.trackingNumber}
+                      {order.courierName ? ` (${order.courierName})` : ''}
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Items Table */}
-              <table className="w-full text-left text-xs border border-neutral-300 mb-6">
-                <thead>
-                  <tr className="bg-neutral-100 border-b border-neutral-300 font-bold uppercase text-neutral-700">
-                    <th className="p-2.5 w-10 text-center">#</th>
-                    <th className="p-2.5">Item Description / SKU</th>
-                    <th className="p-2.5 text-center w-16">Qty</th>
-                    <th className="p-2.5 text-right w-28">Unit Price</th>
-                    <th className="p-2.5 text-right w-28">Total</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-neutral-200">
-                  {order.items.map((item, idx) => (
-                    <tr key={idx} className="receipt-row">
-                      <td className="p-2.5 text-center font-mono text-neutral-500">{idx + 1}</td>
-                      <td className="p-2.5">
-                        <div className="font-bold text-black">{item.productName}</div>
-                        <div className="text-[11px] text-neutral-500 font-mono">
-                          SKU: {item.sku || 'MAG-PROD'} {item.variantName ? `| ${item.variantName}` : ''}
-                        </div>
-                      </td>
-                      <td className="p-2.5 text-center font-bold text-black">{item.quantity}</td>
-                      <td className="p-2.5 text-right font-mono">Rs. {item.price.toLocaleString()}</td>
-                      <td className="p-2.5 text-right font-mono font-bold text-black">Rs. {item.total.toLocaleString()}</td>
+              {/* Order Items Table */}
+              <div className="mb-6">
+                <div className="text-[11px] font-black uppercase tracking-wider text-neutral-700 mb-2">
+                  ORDER ITEMS
+                </div>
+                <table className="w-full text-left text-xs border border-neutral-400">
+                  <thead>
+                    <tr className="bg-neutral-100 border-b border-neutral-400 font-bold uppercase text-black">
+                      <th className="p-2.5 w-10 text-center border-r border-neutral-300">#</th>
+                      <th className="p-2.5 border-r border-neutral-300">Product Name</th>
+                      <th className="p-2.5 text-center w-20 border-r border-neutral-300">Quantity</th>
+                      <th className="p-2.5 text-right w-28 border-r border-neutral-300">Unit Price</th>
+                      <th className="p-2.5 text-right w-28">Subtotal</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-300">
+                    {(order.items || []).map((item, idx) => {
+                      const unitPrice = Number(item.price || 0);
+                      const qty = Number(item.quantity || 1);
+                      const lineTotal = Number(item.total || unitPrice * qty);
+                      return (
+                        <tr key={idx} className="receipt-row">
+                          <td className="p-2.5 text-center font-mono border-r border-neutral-300">
+                            {idx + 1}
+                          </td>
+                          <td className="p-2.5 border-r border-neutral-300">
+                            <div className="font-bold text-black">{item.productName}</div>
+                            {item.sku && (
+                              <div className="text-[10px] text-neutral-600 font-mono">
+                                SKU: {item.sku} {item.variantName ? `| ${item.variantName}` : ''}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-2.5 text-center font-bold text-black border-r border-neutral-300">
+                            {qty}
+                          </td>
+                          <td className="p-2.5 text-right font-mono border-r border-neutral-300">
+                            Rs. {unitPrice.toLocaleString()}
+                          </td>
+                          <td className="p-2.5 text-right font-mono font-bold text-black">
+                            Rs. {lineTotal.toLocaleString()}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-              {/* Totals & Financial Summary */}
-              <div className="flex justify-end mb-8">
-                <div className="w-72 border border-neutral-300 rounded p-3 bg-neutral-50/50 space-y-1.5 text-xs">
-                  <div className="flex justify-between text-neutral-700">
-                    <span>Subtotal:</span>
-                    <span className="font-mono">Rs. {order.subtotal.toLocaleString()}</span>
+              {/* Payment & Totals Section */}
+              <div className="grid grid-cols-12 gap-6 items-start mb-8">
+                <div className="col-span-7 p-3.5 border border-neutral-300 rounded space-y-1.5 text-xs">
+                  <div className="text-[11px] font-black uppercase tracking-wider border-b border-neutral-300 pb-1">
+                    PAYMENT DETAILS
                   </div>
-                  {order.discount > 0 && (
-                    <div className="flex justify-between text-neutral-900 font-medium">
-                      <span>Discount ({order.couponCode || 'Coupon'}):</span>
-                      <span className="font-mono">- Rs. {order.discount.toLocaleString()}</span>
+                  <div>
+                    <span className="font-bold">Payment Method:</span> Cash on Delivery (COD)
+                  </div>
+                  <div>
+                    <span className="font-bold">Payment Status:</span>{' '}
+                    {order.paymentStatus || (order.status === 'Delivered' ? 'Paid (COD)' : 'Pending')}
+                  </div>
+                  <div>
+                    <span className="font-bold">Order Status:</span> {order.status || 'Pending'}
+                  </div>
+                  {order.customerNotes && (
+                    <div className="pt-1 text-[11px] italic">
+                      <span className="font-bold not-italic">Delivery Note:</span> &ldquo;{order.customerNotes}&rdquo;
                     </div>
                   )}
-                  <div className="flex justify-between text-neutral-700">
-                    <span>Delivery Charges:</span>
+                </div>
+
+                <div className="col-span-5 border border-neutral-400 rounded p-3.5 space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="font-semibold">Subtotal:</span>
+                    <span className="font-mono font-bold">Rs. {effectiveSubtotal.toLocaleString()}</span>
+                  </div>
+                  {effectiveDiscount > 0 && (
+                    <div className="flex justify-between">
+                      <span className="font-semibold">
+                        Discount {order.couponCode ? `(${order.couponCode})` : ''}:
+                      </span>
+                      <span className="font-mono">- Rs. {effectiveDiscount.toLocaleString()}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="font-semibold">Delivery Charges:</span>
                     <span className="font-mono">
-                      {order.shippingFee === 0 ? 'FREE' : `Rs. ${order.shippingFee.toLocaleString()}`}
+                      {effectiveShipping === 0 ? 'FREE' : `Rs. ${effectiveShipping.toLocaleString()}`}
                     </span>
                   </div>
                   <div className="flex justify-between pt-2 border-t-2 border-black text-sm font-black text-black">
                     <span>Grand Total:</span>
-                    <span className="font-mono">Rs. {order.grandTotal.toLocaleString()}</span>
+                    <span className="font-mono">Rs. {effectiveGrandTotal.toLocaleString()}</span>
                   </div>
-                  <div className="pt-1 text-[11px] font-bold text-center uppercase tracking-wider text-black bg-neutral-200 p-1 rounded">
-                    Collect Rs. {order.grandTotal.toLocaleString()} Cash Upon Delivery
+                  <div className="pt-1 text-[11px] font-bold text-center uppercase tracking-wider border border-black p-1 rounded mt-1">
+                    COD Amount Due: Rs. {effectiveGrandTotal.toLocaleString()}
                   </div>
                 </div>
               </div>
 
-              {/* Footer / Warranty Terms */}
-              <div className="border-t border-neutral-300 pt-4 text-[10px] text-neutral-600 space-y-1">
-                <div className="font-bold text-black uppercase">Warranty & Return Terms:</div>
-                <p>1. Please inspect packages and verify sealed condition prior to making cash payment to courier.</p>
-                <p>2. Solar panels and inverters include official manufacturer linear warranty backed by M.A. Group of Companies.</p>
-                <p>3. Electrical cables and switches are certified pure copper standards. For claim queries contact helpline.</p>
-                <div className="text-center pt-4 font-mono font-bold text-xs text-neutral-500">
-                  *** {footerNote.toUpperCase()} ***
+              {/* Invoice Footer */}
+              <div className="border-t-2 border-black pt-4 text-center space-y-1">
+                <div className="font-black text-xs uppercase tracking-wider text-black">
+                  Thank you for shopping with {storeName}
+                </div>
+                {footerNote &&
+                  footerNote.toLowerCase() !==
+                    `thank you for shopping with ${storeName.toLowerCase()}` && (
+                    <div className="text-[11px] text-neutral-700 font-medium">{footerNote}</div>
+                  )}
+                <div className="text-[10px] text-neutral-600 pt-1">
+                  This is a computer-generated sales invoice for Order #{invoiceNumber}.
                 </div>
               </div>
             </div>
           )}
 
           {/* ==============================================================
-              80MM POS THERMAL RECEIPT TEMPLATE (Standard Counter Roll)
+              80MM POS THERMAL RECEIPT TEMPLATE
               ============================================================== */}
           {format === '80mm' && (
             <div className="print-friendly receipt-80mm bg-white text-black p-4 rounded shadow-lg border border-neutral-300 text-xs">
@@ -280,41 +394,48 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                   />
                 )}
                 <div className="font-black text-base uppercase tracking-tight">{storeName}</div>
-                <div className="text-[10px] uppercase font-bold tracking-wider">{tagline}</div>
-                <div className="text-[10px]">{addressDisplay}</div>
-                <div className="text-[10px]">Ph: {phoneDisplay}</div>
+                <div className="text-[10px] uppercase font-bold tracking-wider">SALES INVOICE</div>
+                {addressDisplay && <div className="text-[10px]">{addressDisplay}</div>}
+                {phoneDisplay && <div className="text-[10px]">Ph: {phoneDisplay}</div>}
               </div>
 
               <div className="print-divider-double"></div>
 
               <div className="space-y-0.5 my-2">
                 <div className="flex justify-between font-bold">
-                  <span>ORDER #{order.orderNumber}</span>
-                  <span>COD RECEIPT</span>
+                  <span>INVOICE #{invoiceNumber}</span>
+                  <span>{order.status.toUpperCase()}</span>
                 </div>
                 <div className="flex justify-between text-[11px]">
                   <span>DATE: {formattedDate}</span>
                   <span>{formattedTime}</span>
                 </div>
+                <div className="text-[10px] font-bold">PAYMENT: CASH ON DELIVERY (COD)</div>
               </div>
 
               <div className="print-divider-dashed"></div>
 
               {/* Customer */}
               <div className="my-2 space-y-0.5 text-[11px]">
-                <div><span className="font-bold">CUSTOMER:</span> {order.customer.fullName}</div>
-                <div><span className="font-bold">PHONE:</span> {order.customer.phone}</div>
-                <div><span className="font-bold">DESTINATION:</span> {order.customer.city}</div>
-                <div className="text-[10px] leading-tight text-neutral-800">{order.customer.addressLine}</div>
+                <div>
+                  <span className="font-bold">CUSTOMER:</span> {order.customer?.fullName}
+                </div>
+                <div>
+                  <span className="font-bold">PHONE:</span> {order.customer?.phone}
+                </div>
+                <div>
+                  <span className="font-bold">ADDRESS:</span> {order.customer?.addressLine},{' '}
+                  {order.customer?.city}
+                </div>
               </div>
 
               <div className="print-divider-dashed"></div>
 
               {/* Line Items Header */}
               <div className="grid grid-cols-12 font-bold text-[11px] pb-1 border-b border-black">
-                <div className="col-span-6">ITEM</div>
+                <div className="col-span-6">PRODUCT</div>
                 <div className="col-span-2 text-center">QTY</div>
-                <div className="col-span-4 text-right">TOTAL</div>
+                <div className="col-span-4 text-right">SUBTOTAL</div>
               </div>
 
               {/* Line Items */}
@@ -323,10 +444,10 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                   <div key={idx} className="receipt-row py-1 text-[11px]">
                     <div className="font-bold leading-tight">{item.productName}</div>
                     <div className="grid grid-cols-12 text-[10px] text-neutral-700">
-                      <div className="col-span-6">{item.sku}</div>
+                      <div className="col-span-6">Rs.{Number(item.price).toLocaleString()}</div>
                       <div className="col-span-2 text-center font-bold">{item.quantity}x</div>
                       <div className="col-span-4 text-right font-bold text-black font-mono">
-                        Rs.{item.total.toLocaleString()}
+                        Rs.{Number(item.total || item.price * item.quantity).toLocaleString()}
                       </div>
                     </div>
                   </div>
@@ -339,42 +460,38 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
               <div className="space-y-1 font-mono text-[11px] my-2">
                 <div className="flex justify-between">
                   <span>SUBTOTAL:</span>
-                  <span>Rs.{order.subtotal.toLocaleString()}</span>
+                  <span>Rs.{effectiveSubtotal.toLocaleString()}</span>
                 </div>
-                {order.discount > 0 && (
+                {effectiveDiscount > 0 && (
                   <div className="flex justify-between font-bold">
                     <span>DISCOUNT:</span>
-                    <span>-Rs.{order.discount.toLocaleString()}</span>
+                    <span>-Rs.{effectiveDiscount.toLocaleString()}</span>
                   </div>
                 )}
                 <div className="flex justify-between">
-                  <span>DELIVERY FEE:</span>
-                  <span>{order.shippingFee === 0 ? 'FREE' : `Rs.${order.shippingFee.toLocaleString()}`}</span>
+                  <span>DELIVERY:</span>
+                  <span>
+                    {effectiveShipping === 0 ? 'FREE' : `Rs.${effectiveShipping.toLocaleString()}`}
+                  </span>
                 </div>
                 <div className="print-divider-dashed"></div>
                 <div className="flex justify-between font-black text-sm pt-1">
-                  <span>TOTAL COD:</span>
-                  <span>Rs.{order.grandTotal.toLocaleString()}</span>
+                  <span>GRAND TOTAL:</span>
+                  <span>Rs.{effectiveGrandTotal.toLocaleString()}</span>
                 </div>
               </div>
 
               <div className="print-divider-dashed"></div>
 
-              {/* Courier Instructions */}
-              <div className="text-center my-2 border border-black p-1.5 font-bold uppercase text-[10px]">
-                COLLECT CASH: RS. {order.grandTotal.toLocaleString()}
-              </div>
-
-              <div className="text-center text-[9px] space-y-0.5 mt-3 text-neutral-600">
-                <div>Genuine Products Verified Guarantee</div>
-                <div>Keep receipt for warranty claims</div>
-                <div className="font-bold font-mono mt-1">*** THANK YOU ***</div>
+              <div className="text-center text-[10px] space-y-0.5 mt-3">
+                <div className="font-bold">Thank you for shopping with</div>
+                <div className="font-black uppercase">{storeName}</div>
               </div>
             </div>
           )}
 
           {/* ==============================================================
-              58MM POS THERMAL RECEIPT TEMPLATE (Compact Mini Roll)
+              58MM POS THERMAL RECEIPT TEMPLATE
               ============================================================== */}
           {format === '58mm' && (
             <div className="print-friendly receipt-58mm bg-white text-black p-2.5 rounded shadow-lg border border-neutral-300 text-[10px] leading-tight font-mono">
@@ -387,27 +504,32 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                   />
                 )}
                 <div className="font-black text-xs uppercase tracking-tight">{storeName}</div>
-                <div className="text-[8px] uppercase font-bold">{tagline}</div>
-                <div className="text-[8px]">Ph: {phoneDisplay}</div>
+                <div className="text-[8px] uppercase font-bold">SALES INVOICE</div>
+                {phoneDisplay && <div className="text-[8px]">Ph: {phoneDisplay}</div>}
               </div>
 
               <div className="print-divider-double"></div>
 
               <div className="my-1 text-[9px]">
                 <div className="flex justify-between font-bold">
-                  <span>ORD: {order.orderNumber}</span>
+                  <span>INV: #{invoiceNumber}</span>
                   <span>COD</span>
                 </div>
-                <div className="text-[8px] text-neutral-600">{formattedDate} {formattedTime}</div>
+                <div className="text-[8px]">
+                  {formattedDate} {formattedTime}
+                </div>
+                <div className="text-[8px] font-bold">STATUS: {order.status}</div>
               </div>
 
               <div className="print-divider-dashed"></div>
 
               {/* Customer */}
               <div className="my-1 text-[9px] leading-tight">
-                <div className="font-bold truncate">{order.customer.fullName}</div>
-                <div>{order.customer.phone}</div>
-                <div className="font-bold">{order.customer.city}</div>
+                <div className="font-bold truncate">{order.customer?.fullName}</div>
+                <div>{order.customer?.phone}</div>
+                <div>
+                  {order.customer?.addressLine}, {order.customer?.city}
+                </div>
               </div>
 
               <div className="print-divider-dashed"></div>
@@ -418,8 +540,12 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
                   <div key={idx} className="receipt-row leading-tight">
                     <div className="font-bold truncate">{item.productName}</div>
                     <div className="flex justify-between text-[8.5px]">
-                      <span>{item.quantity} x Rs.{item.price.toLocaleString()}</span>
-                      <span className="font-bold">Rs.{item.total.toLocaleString()}</span>
+                      <span>
+                        {item.quantity} x Rs.{Number(item.price).toLocaleString()}
+                      </span>
+                      <span className="font-bold">
+                        Rs.{Number(item.total || item.price * item.quantity).toLocaleString()}
+                      </span>
                     </div>
                   </div>
                 ))}
@@ -431,31 +557,21 @@ export const PrintReceiptModal: React.FC<PrintReceiptModalProps> = ({
               <div className="space-y-0.5 text-[9px] my-1">
                 <div className="flex justify-between">
                   <span>SUBTOTAL:</span>
-                  <span>Rs.{order.subtotal.toLocaleString()}</span>
+                  <span>Rs.{effectiveSubtotal.toLocaleString()}</span>
                 </div>
-                {order.discount > 0 && (
-                  <div className="flex justify-between">
-                    <span>DISC:</span>
-                    <span>-Rs.{order.discount.toLocaleString()}</span>
-                  </div>
-                )}
                 <div className="flex justify-between">
-                  <span>SHIP:</span>
-                  <span>{order.shippingFee === 0 ? 'FREE' : `Rs.${order.shippingFee}`}</span>
+                  <span>DELIVERY:</span>
+                  <span>{effectiveShipping === 0 ? 'FREE' : `Rs.${effectiveShipping}`}</span>
                 </div>
                 <div className="print-divider-dashed"></div>
                 <div className="flex justify-between font-bold text-xs pt-0.5">
-                  <span>PAY:</span>
-                  <span>Rs.{order.grandTotal.toLocaleString()}</span>
+                  <span>TOTAL:</span>
+                  <span>Rs.{effectiveGrandTotal.toLocaleString()}</span>
                 </div>
               </div>
 
-              <div className="border border-black p-1 text-center font-bold text-[9px] my-1.5">
-                CASH DUE: RS. {order.grandTotal.toLocaleString()}
-              </div>
-
-              <div className="text-center text-[8px] text-neutral-600 mt-2">
-                THANK YOU FOR SHOPPING!
+              <div className="text-center text-[8px] mt-2 font-bold">
+                Thank you for shopping with {storeName}
               </div>
             </div>
           )}

@@ -1167,9 +1167,9 @@ app.get('/api/orders/track/:orderNumber', async (req: Request, res: Response) =>
   return res.json(order);
 });
 
-// PATCH /api/orders/:id/status (Admin Protected)
-app.patch('/api/orders/:id/status', requireAdminAuth, async (req: Request, res: Response) => {
-  const { status, paymentStatus, trackingNumber, courierName, internalNotes } = req.body;
+// PATCH /api/orders/:id/status & PUT /api/orders/:id (Admin Protected - Update Order Status, Items, Quantities, Customer Details)
+const handleAdminOrderUpdate = async (req: Request, res: Response) => {
+  const { status, paymentStatus, trackingNumber, courierName, internalNotes, items, customer, discount, shippingFee } = req.body;
 
   if (supabaseService.isConfigured()) {
     try {
@@ -1195,6 +1195,41 @@ app.patch('/api/orders/:id/status', requireAdminAuth, async (req: Request, res: 
   if (trackingNumber !== undefined) updates.trackingNumber = trackingNumber;
   if (courierName !== undefined) updates.courierName = courierName;
   if (internalNotes !== undefined) updates.internalNotes = internalNotes;
+  if (customer && typeof customer === 'object') {
+    updates.customer = {
+      ...existingOrder.customer,
+      ...customer,
+    };
+  }
+
+  // If admin modified order items or quantities, recalculate subtotal, item totals, and grandTotal
+  if (Array.isArray(items) && items.length > 0) {
+    const normalizedItems = items.map((it: any) => {
+      const qty = Math.max(1, Number(it.quantity) || 1);
+      const unitPrice = Number(it.price) || 0;
+      return {
+        ...it,
+        quantity: qty,
+        price: unitPrice,
+        total: qty * unitPrice,
+      };
+    });
+    const newSubtotal = normalizedItems.reduce((sum: number, it: any) => sum + it.total, 0);
+    const effectiveDiscount = discount !== undefined ? Number(discount) : (existingOrder.discount || 0);
+    const settings = db.getSettings();
+    const effectiveShipping =
+      shippingFee !== undefined
+        ? Number(shippingFee)
+        : newSubtotal >= (settings.freeShippingThreshold || 5000)
+        ? 0
+        : (settings.standardShippingFee || 450);
+
+    updates.items = normalizedItems;
+    updates.subtotal = newSubtotal;
+    updates.discount = effectiveDiscount;
+    updates.shippingFee = effectiveShipping;
+    updates.grandTotal = Math.max(0, newSubtotal - effectiveDiscount + effectiveShipping);
+  }
 
   if (status && status !== existingOrder.status) {
     updates.status = status as OrderStatus;
@@ -1216,7 +1251,7 @@ app.patch('/api/orders/:id/status', requireAdminAuth, async (req: Request, res: 
   if (supabaseService.isConfigured() && updated) {
     const supaRes = await supabaseService.updateOrder(req.params.id, updates, updated);
     if (!supaRes.success && !supaRes.tableMissing) {
-      return res.status(500).json({ error: supaRes.error || 'Failed to update order status in Supabase.' });
+      return res.status(500).json({ error: supaRes.error || 'Failed to update order in Supabase.' });
     }
     if (status && status !== existingOrder.status) {
       for (const item of updated.items || []) {
@@ -1230,11 +1265,14 @@ app.patch('/api/orders/:id/status', requireAdminAuth, async (req: Request, res: 
   db.logAction(
     'UPDATE_ORDER_STATUS',
     (req as any).adminSession.username,
-    `Order ${existingOrder.orderNumber} status changed to ${status || existingOrder.status}`
+    `Order ${existingOrder.orderNumber} updated (Status: ${status || existingOrder.status}, Total: Rs. ${(updated?.grandTotal || existingOrder.grandTotal).toLocaleString()})`
   );
 
   return res.json(updated);
-});
+};
+
+app.patch('/api/orders/:id/status', requireAdminAuth, handleAdminOrderUpdate);
+app.put('/api/orders/:id', requireAdminAuth, handleAdminOrderUpdate);
 
 // PATCH /api/admin/orders/:id/risk-review (Admin/Manager Protected)
 app.patch('/api/admin/orders/:id/risk-review', requireRole(['superadmin', 'admin', 'manager']), (req: Request, res: Response) => {

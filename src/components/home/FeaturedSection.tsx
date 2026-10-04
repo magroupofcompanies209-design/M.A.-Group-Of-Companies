@@ -7,21 +7,22 @@ export const FeaturedSection: React.FC = () => {
   const { products, navigate } = useStore();
   const [activeTab, setActiveTab] = useState<'deals' | 'bestsellers' | 'solar' | 'new'>('deals');
 
-  // Filter products based on active tab
-  let filtered = products;
+  // Filter products based on active tab (only active storefront products)
+  const activeProducts = products.filter((p) => p.status !== 'archived' && p.status !== 'inactive' && !p.isArchived);
+  let filtered = activeProducts;
   if (activeTab === 'deals') {
-    filtered = products.filter((p) => p.isDeal || (p.salePrice && p.salePrice < p.price));
+    filtered = activeProducts.filter((p) => p.isDeal || (p.salePrice && p.salePrice < p.price));
   } else if (activeTab === 'bestsellers') {
-    filtered = products.filter((p) => p.isBestSeller);
+    filtered = activeProducts.filter((p) => p.isBestSeller || p.isFeatured);
   } else if (activeTab === 'solar') {
-    filtered = products.filter((p) => p.categoryId === 'cat-solar');
+    filtered = activeProducts.filter((p) => p.categoryId === 'cat-solar');
   } else if (activeTab === 'new') {
-    filtered = products.filter((p) => p.isNewArrival);
+    filtered = activeProducts.filter((p) => p.isNewArrival);
   }
 
   // Fallback if empty
   if (filtered.length === 0) {
-    filtered = products.slice(0, 8);
+    filtered = activeProducts.slice(0, 8);
   }
 
   return (

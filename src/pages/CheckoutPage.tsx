@@ -2,6 +2,13 @@ import React, { useState } from 'react';
 import { useStore } from '../context/StoreContext';
 import { safeJsonResponse } from '../utils/api';
 import {
+  supabase,
+  isFrontendSupabaseConfigured,
+  insertOrUpdateOrderInSupabase,
+  insertOrUpdateProductInSupabase,
+} from '../lib/supabaseClient';
+import type { Order } from '../types';
+import {
   ShieldCheck,
   Truck,
   CheckCircle2,
@@ -158,6 +165,21 @@ export const CheckoutPage: React.FC = () => {
 
       if (!res.ok || data.error) {
         throw new Error(data.error || 'Failed to place order.');
+      }
+
+      // Also ensure direct Supabase order persistence if frontend client is configured
+      if (isFrontendSupabaseConfigured && supabase && data && data.id) {
+        await insertOrUpdateOrderInSupabase(data as Order);
+        for (const item of cart) {
+          if (item.product) {
+            const nextStock = Math.max(0, (item.product.stock || 0) - item.quantity);
+            await insertOrUpdateProductInSupabase({
+              ...item.product,
+              stock: nextStock,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        }
       }
 
       // Success

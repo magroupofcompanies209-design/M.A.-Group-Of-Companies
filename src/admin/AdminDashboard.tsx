@@ -8,6 +8,9 @@ import {
   deleteProductInSupabase,
   insertOrUpdateCategoryInSupabase,
   deleteCategoryInSupabase,
+  fetchOrdersFromSupabase,
+  insertOrUpdateOrderInSupabase,
+  deleteOrderInSupabase,
   uploadImageDirectlyToSupabaseStorage,
 } from '../lib/supabaseClient';
 import {
@@ -246,7 +249,25 @@ export const AdminDashboard: React.FC = () => {
     try {
       await Promise.all([refreshProducts(), refreshCategories()]);
       const [ordRes, banRes, coupRes, inqRes, logRes, anaRes, setRes, ledgRes, custRes] = await Promise.all([
-        adminFetch('/api/orders').then((r) => safeJsonResponse(r, [])),
+        fetchOrdersFromSupabase()
+          .then(async (supaOrders) => {
+            const apiOrders = await adminFetch('/api/orders')
+              .then((r) => safeJsonResponse(r, []))
+              .catch(() => []);
+            if (Array.isArray(supaOrders) && supaOrders.length > 0) {
+              // Merge any orders if needed, prioritizing Supabase
+              const byId = new Map<string, Order>();
+              if (Array.isArray(apiOrders)) {
+                apiOrders.forEach((o: Order) => byId.set(o.id, o));
+              }
+              supaOrders.forEach((o: Order) => byId.set(o.id, o));
+              return Array.from(byId.values()).sort(
+                (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+              );
+            }
+            return Array.isArray(apiOrders) ? apiOrders : [];
+          })
+          .catch(() => adminFetch('/api/orders').then((r) => safeJsonResponse(r, []))),
         adminFetch('/api/banners').then((r) => safeJsonResponse(r, [])),
         adminFetch('/api/coupons').then((r) => safeJsonResponse(r, [])),
         adminFetch('/api/inquiries').then((r) => safeJsonResponse(r, [])),
@@ -638,6 +659,9 @@ export const AdminDashboard: React.FC = () => {
           if (dRes.ok) deletedDirectly = true;
         } else if (type === 'category') {
           const dRes = await deleteCategoryInSupabase(id, categories);
+          if (dRes.ok) deletedDirectly = true;
+        } else if (type === 'order') {
+          const dRes = await deleteOrderInSupabase(id, orders);
           if (dRes.ok) deletedDirectly = true;
         }
       }
@@ -1056,34 +1080,111 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  // Order Status Update
+  // Order Status & Detail Update (Persisted to Supabase)
   const handleUpdateOrderStatus = async (
     orderId: string,
     status: OrderStatus,
     paymentStatus?: PaymentStatus,
     trackingNumber?: string,
-    courierName?: string
+    courierName?: string,
+    customOverrides?: Partial<Order>
   ) => {
     try {
+      const existingOrder = orders.find((o) => o.id === orderId) || selectedOrder;
+      let updatedOrderCandidate: Order | null = existingOrder
+        ? {
+            ...existingOrder,
+            status,
+            paymentStatus:
+              paymentStatus ||
+              (status === 'Delivered'
+                ? 'COD Collected'
+                : status === 'Cancelled'
+                ? 'Cancelled'
+                : existingOrder.paymentStatus),
+            ...(trackingNumber !== undefined ? { trackingNumber } : {}),
+            ...(courierName !== undefined ? { courierName } : {}),
+            ...(customOverrides || {}),
+          }
+        : null;
+
+      if (updatedOrderCandidate && customOverrides?.items) {
+        const recalculatedItems = customOverrides.items.map((it) => {
+          const qty = Math.max(1, Number(it.quantity) || 1);
+          const unitPrice = Number(it.price) || 0;
+          return {
+            ...it,
+            quantity: qty,
+            price: unitPrice,
+            total: qty * unitPrice,
+          };
+        });
+        const subtotal = recalculatedItems.reduce((sum, it) => sum + it.total, 0);
+        const shippingFee =
+          customOverrides.shippingFee !== undefined
+            ? Number(customOverrides.shippingFee)
+            : Number(updatedOrderCandidate.shippingFee) || 0;
+        const discount =
+          customOverrides.discount !== undefined
+            ? Number(customOverrides.discount)
+            : Number(updatedOrderCandidate.discount) || 0;
+        const grandTotal = Math.max(0, subtotal - discount + shippingFee);
+        updatedOrderCandidate = {
+          ...updatedOrderCandidate,
+          items: recalculatedItems,
+          subtotal,
+          shippingFee,
+          discount,
+          grandTotal,
+        };
+      }
+
+      let savedDirect = false;
+      if (isFrontendSupabaseConfigured && supabase && updatedOrderCandidate) {
+        const updatedList = orders.map((o) => (o.id === orderId ? updatedOrderCandidate! : o));
+        const supaRes = await insertOrUpdateOrderInSupabase(updatedOrderCandidate, updatedList);
+        if (supaRes.ok && supaRes.order) {
+          savedDirect = true;
+          updatedOrderCandidate = supaRes.order;
+        }
+      }
+
       const res = await adminFetch(`/api/orders/${orderId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status, paymentStatus, trackingNumber, courierName }),
+        body: JSON.stringify({
+          status,
+          paymentStatus: updatedOrderCandidate?.paymentStatus || paymentStatus,
+          trackingNumber,
+          courierName,
+          ...(customOverrides || {}),
+        }),
       });
-      const updated = await safeJsonResponse(res, null);
-      if (res.ok && updated && !updated.error) {
-        setOrders((prev) => prev.map((o) => (o.id === orderId ? updated : o)));
+      const apiUpdated = await safeJsonResponse(res, null);
+      const finalUpdated =
+        res.ok && apiUpdated && !apiUpdated.error ? apiUpdated : savedDirect ? updatedOrderCandidate : null;
+
+      if (finalUpdated) {
+        setOrders((prev) => prev.map((o) => (o.id === orderId ? finalUpdated : o)));
         if (selectedOrder && selectedOrder.id === orderId) {
-          setSelectedOrder(updated);
+          setSelectedOrder(finalUpdated);
+        }
+        if (printingOrder && printingOrder.id === orderId) {
+          setPrintingOrder(finalUpdated);
         }
         await refreshProducts();
         await loadAdminData();
-        showToast(`Order status updated to "${status}".`, 'success');
+        showToast(
+          customOverrides
+            ? `Order #${finalUpdated.orderNumber} updated in Supabase.`
+            : `Order status updated to "${status}".`,
+          'success'
+        );
       } else {
-        showToast(updated?.error || 'Failed to update status.', 'error');
+        showToast(apiUpdated?.error || 'Failed to update order.', 'error');
       }
     } catch (err: any) {
-      showToast(err?.message || 'Failed to update status.', 'error');
+      showToast(err?.message || 'Failed to update order.', 'error');
     }
   };
 
@@ -1785,13 +1886,24 @@ export const AdminDashboard: React.FC = () => {
                           <span className="text-[10px] text-neutral-300 font-semibold">{o.paymentStatus}</span>
                         </td>
                         <td className="p-3 text-center">
-                          <button
-                            onClick={() => setSelectedOrder(o)}
-                            className="p-1 rounded bg-neutral-800 hover:bg-neutral-700 text-amber-400"
-                            title="View Order"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </button>
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => setSelectedOrder(o)}
+                              className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                              title="View Order Details"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>View</span>
+                            </button>
+                            <button
+                              onClick={() => setPrintingOrder(o)}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                              title="Print Sales Invoice"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                              <span>Print Invoice</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -2369,28 +2481,32 @@ export const AdminDashboard: React.FC = () => {
                             <option value="Cancelled">Cancelled</option>
                           </select>
                         </td>
-                        <td className="p-3 text-center space-x-1">
-                          <button
-                            onClick={() => setSelectedOrder(ord)}
-                            className="p-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-amber-400 cursor-pointer"
-                            title="View Order Details & Shipping"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => setPrintingOrder(ord)}
-                            className="p-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-emerald-400 cursor-pointer"
-                            title="Print Receipt (A4, 80mm POS, 58mm POS)"
-                          >
-                            <Printer className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => promptDeleteOrder(ord)}
-                            className="p-1.5 rounded bg-neutral-800 hover:bg-rose-900 text-rose-400 cursor-pointer"
-                            title="Delete Order"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                        <td className="p-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                            <button
+                              onClick={() => setSelectedOrder(ord)}
+                              className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                              title="View Order Details & Edit Quantities"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>View</span>
+                            </button>
+                            <button
+                              onClick={() => setPrintingOrder(ord)}
+                              className="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 font-bold text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                              title="Print Sales Invoice (A4 / POS)"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                              <span>Print Invoice</span>
+                            </button>
+                            <button
+                              onClick={() => promptDeleteOrder(ord)}
+                              className="p-1.5 rounded-lg bg-neutral-800 hover:bg-rose-900 text-rose-400 cursor-pointer transition-colors"
+                              title="Delete Order"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -4334,11 +4450,11 @@ export const AdminDashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setPrintingOrder(selectedOrder)}
-                  className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
-                  title="Print Receipt (A4, 80mm POS, 58mm POS)"
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                  title="Print Sales Invoice (A4, 80mm POS, 58mm POS)"
                 >
                   <Printer className="w-3.5 h-3.5" />
-                  <span>Print Receipt</span>
+                  <span>Print Invoice</span>
                 </button>
                 <button
                   onClick={() => setSelectedOrder(null)}
@@ -4433,7 +4549,11 @@ export const AdminDashboard: React.FC = () => {
 
             {/* Items Ordered Table */}
             <div className="space-y-2">
-              <div className="text-amber-400 font-bold uppercase text-[10px] tracking-wider">Items Ordered</div>
+              <div className="flex items-center justify-between">
+                <div className="text-amber-400 font-bold uppercase text-[10px] tracking-wider">
+                  Items Ordered (Adjust quantity to recalculate &amp; sync invoice)
+                </div>
+              </div>
               <div className="rounded-xl border border-neutral-800 overflow-hidden">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-neutral-950 text-neutral-400 font-bold border-b border-neutral-800">
@@ -4441,14 +4561,64 @@ export const AdminDashboard: React.FC = () => {
                       <th className="p-2.5">Product</th>
                       <th className="p-2.5 text-center">Qty</th>
                       <th className="p-2.5 text-right">Unit Price</th>
-                      <th className="p-2.5 text-right">Total</th>
+                      <th className="p-2.5 text-right">Subtotal</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-800">
                     {selectedOrder.items.map((it, idx) => (
                       <tr key={idx} className="hover:bg-neutral-800/30">
                         <td className="p-2.5 font-medium text-white">{it.productName}</td>
-                        <td className="p-2.5 text-center font-bold text-neutral-300">{it.quantity}</td>
+                        <td className="p-2.5 text-center font-bold text-neutral-300">
+                          <div className="inline-flex items-center gap-1 bg-neutral-950 border border-neutral-700 rounded-lg px-1.5 py-0.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newQty = Math.max(1, (Number(it.quantity) || 1) - 1);
+                                const updatedItems = selectedOrder.items.map((item, i) =>
+                                  i === idx
+                                    ? { ...item, quantity: newQty, total: newQty * Number(item.price) }
+                                    : item
+                                );
+                                handleUpdateOrderStatus(
+                                  selectedOrder.id,
+                                  selectedOrder.status,
+                                  selectedOrder.paymentStatus,
+                                  selectedOrder.trackingNumber,
+                                  selectedOrder.courierName,
+                                  { items: updatedItems }
+                                );
+                              }}
+                              className="px-1.5 text-neutral-400 hover:text-white cursor-pointer font-black"
+                              title="Decrease quantity"
+                            >
+                              -
+                            </button>
+                            <span className="min-w-[24px] text-center text-white font-mono">{it.quantity}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const newQty = (Number(it.quantity) || 1) + 1;
+                                const updatedItems = selectedOrder.items.map((item, i) =>
+                                  i === idx
+                                    ? { ...item, quantity: newQty, total: newQty * Number(item.price) }
+                                    : item
+                                );
+                                handleUpdateOrderStatus(
+                                  selectedOrder.id,
+                                  selectedOrder.status,
+                                  selectedOrder.paymentStatus,
+                                  selectedOrder.trackingNumber,
+                                  selectedOrder.courierName,
+                                  { items: updatedItems }
+                                );
+                              }}
+                              className="px-1.5 text-amber-400 hover:text-amber-300 cursor-pointer font-black"
+                              title="Increase quantity"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </td>
                         <td className="p-2.5 text-right text-neutral-400">Rs. {it.price.toLocaleString()}</td>
                         <td className="p-2.5 text-right font-bold text-white">Rs. {it.total.toLocaleString()}</td>
                       </tr>
@@ -4494,11 +4664,11 @@ export const AdminDashboard: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setPrintingOrder(selectedOrder)}
-                  className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-xs cursor-pointer flex items-center gap-1.5"
-                  title="Print Thermal / A4 Receipt"
+                  className="px-4 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-400 font-bold text-xs cursor-pointer flex items-center gap-1.5"
+                  title="Print Sales Invoice (A4 / Thermal)"
                 >
-                  <Printer className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Print Receipt</span>
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Invoice</span>
                 </button>
                 <button
                   type="button"

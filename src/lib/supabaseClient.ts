@@ -681,6 +681,29 @@ export async function insertOrUpdateOrderInSupabase(
   }
 }
 
+export async function deleteOrderInSupabase(
+  id: string,
+  currentOrders?: Order[]
+): Promise<{ ok: boolean; error?: string }> {
+  if (!supabase) return { ok: false, error: 'Frontend Supabase client not configured' };
+  try {
+    const { error } = await supabase.from('orders').delete().eq('id', id);
+    if (error && !isTableOrSchemaMissingError(error.message)) {
+      return { ok: false, error: error.message };
+    }
+    const list = (await readCloudTableFromSupabase<Order>('orders')) || currentOrders;
+    if (list) {
+      await writeCloudTableToSupabase(
+        'orders',
+        list.filter((o) => o.id !== id)
+      );
+    }
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to delete order' };
+  }
+}
+
 export async function uploadImageDirectlyToSupabaseStorage(
   file: File,
   bucketName: string = PUBLIC_IMAGES_BUCKET
