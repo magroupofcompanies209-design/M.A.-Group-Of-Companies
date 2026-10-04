@@ -4,6 +4,9 @@ import type { Product, Category, Order, StoreSettings, AdminSecuritySettings } f
 let supabaseInstance: SupabaseClient | null = null;
 let supabaseAdminInstance: SupabaseClient | null = null;
 
+const DB_BUCKET = 'ma-group-database';
+let dbBucketVerified = false;
+
 function cleanEnvValue(val?: string): string {
   if (!val) return '';
   let trimmed = val.trim();
@@ -82,7 +85,111 @@ export function getSupabaseAdmin(): SupabaseClient | null {
   return supabaseAdminInstance;
 }
 
+function isTableMissingError(err?: string): boolean {
+  if (!err) return false;
+  const lower = err.toLowerCase();
+  return (
+    lower.includes('not found') ||
+    lower.includes('schema cache') ||
+    lower.includes('could not find the table') ||
+    (lower.includes('relation') && lower.includes('does not exist'))
+  );
+}
+
+// ============================================================================
+// SUPABASE CLOUD STORAGE DOCUMENT ENGINE (Automatic Serverless Persistence)
+// Ensures 100% permanent Supabase persistence even before SQL tables are created
+// ============================================================================
+
+async function ensureCloudDbBucket(): Promise<SupabaseClient | null> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return null;
+  if (!dbBucketVerified) {
+    try {
+      const { data: buckets } = await sb.storage.listBuckets();
+      if (buckets && !buckets.some((b) => b.name === DB_BUCKET)) {
+        await sb.storage.createBucket(DB_BUCKET, { public: false });
+      }
+      dbBucketVerified = true;
+    } catch {
+      // Ignore if anon key cannot list buckets
+    }
+  }
+  return sb;
+}
+
+async function readCloudTable<T>(tableName: string): Promise<T[] | null> {
+  const sb = await ensureCloudDbBucket();
+  if (!sb) return null;
+  try {
+    const { data, error } = await sb.storage.from(DB_BUCKET).download(`${tableName}.json`);
+    if (error || !data) {
+      // Fallback: check product-images/_db/${tableName}.json in case only public bucket exists
+      const { data: fbData, error: fbErr } = await sb.storage.from('product-images').download(`_db/${tableName}.json`);
+      if (fbErr || !fbData) return null;
+      const fbText = await fbData.text();
+      const parsed = JSON.parse(fbText);
+      return Array.isArray(parsed) ? parsed : null;
+    }
+    const text = await data.text();
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCloudTable<T>(tableName: string, records: T[]): Promise<{ ok: boolean; error?: string }> {
+  const sb = await ensureCloudDbBucket();
+  if (!sb) return { ok: false, error: 'Supabase is not configured' };
+  try {
+    const payload = Buffer.from(JSON.stringify(records, null, 2), 'utf-8');
+    const { error } = await sb.storage.from(DB_BUCKET).upload(`${tableName}.json`, payload, {
+      contentType: 'application/json',
+      cacheControl: '0',
+      upsert: true,
+    });
+    if (error) {
+      // Fallback to product-images/_db/${tableName}.json
+      const { error: fbErr } = await sb.storage.from('product-images').upload(`_db/${tableName}.json`, payload, {
+        contentType: 'application/json',
+        cacheControl: '0',
+        upsert: true,
+      });
+      if (fbErr) return { ok: false, error: fbErr.message };
+    }
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to write to Supabase cloud storage' };
+  }
+}
+
+export async function seedSupabaseCloudProductsIfNeeded(initialProducts: Product[]): Promise<Product[]> {
+  const existing = await fetchAllSupabaseProducts();
+  if (existing && existing.length > 0) {
+    return existing;
+  }
+  await writeCloudTable('products', initialProducts);
+  return initialProducts;
+}
+
+export async function seedSupabaseCloudCategoriesIfNeeded(initialCategories: Category[]): Promise<Category[]> {
+  const existing = await fetchAllSupabaseCategories();
+  if (existing && existing.length > 0) {
+    return existing;
+  }
+  await writeCloudTable('categories', initialCategories);
+  return initialCategories;
+}
+
+// ============================================================================
+// DATA MAPPING HELPERS (Clean Relational Columns <-> Rich Frontend Types)
+// ============================================================================
+
 export function mapSupabaseRowToProduct(row: any): Product {
+  if (row && row.categoryId && Array.isArray(row.images) && !row.category_id && !row.data) {
+    return row as Product;
+  }
   const baseData: Partial<Product> = (row.data && typeof row.data === 'object') ? row.data : {};
 
   let parsedSpecs: { key: string; value: string }[] = baseData.specifications || [];
@@ -254,6 +361,9 @@ export function mapProductToCoreSupabaseRow(product: Product, includeId: boolean
 }
 
 export function mapSupabaseRowToCategory(row: any): Category {
+  if (row && row.slug && row.subcategories && !row.image_url && !row.data) {
+    return row as Category;
+  }
   const baseData: Partial<Category> = (row.data && typeof row.data === 'object') ? row.data : {};
   const idStr = String(row.id || baseData.id || `cat-${Date.now()}`);
   const nameStr = row.name || baseData.name || 'Category';
@@ -287,6 +397,9 @@ export function mapCategoryToSupabaseRow(cat: Category): Record<string, any> {
 }
 
 export function mapSupabaseRowToOrder(row: any): Order {
+  if (row && row.orderNumber && row.customer && Array.isArray(row.items) && !row.order_number) {
+    return row as Order;
+  }
   const baseData: Partial<Order> = (row.data && typeof row.data === 'object') ? row.data : {};
   const createdAt = row.created_at || baseData.createdAt || new Date().toISOString();
   const statusVal = (row.order_status || row.status || baseData.status || 'Pending') as Order['status'];
@@ -384,6 +497,10 @@ export function mapOrderToCoreSupabaseRow(order: Order, includeId: boolean = tru
   return row;
 }
 
+// ============================================================================
+// PRODUCTS CRUD (SQL Table + Automatic Cloud Bucket Persistence)
+// ============================================================================
+
 export async function fetchAllSupabaseProducts(): Promise<Product[] | null> {
   const sb = getSupabaseAdmin() || getSupabase();
   if (!sb) return null;
@@ -392,64 +509,124 @@ export async function fetchAllSupabaseProducts(): Promise<Product[] | null> {
       .from('products')
       .select('*')
       .order('created_at', { ascending: false });
-    if (error) {
-      const { data: fallbackData, error: fallbackErr } = await sb.from('products').select('*');
-      if (fallbackErr) return null;
-      return (fallbackData || []).map(mapSupabaseRowToProduct);
+    if (!error && data) {
+      return data.map(mapSupabaseRowToProduct);
     }
-    if (!data) return [];
-    return data.map(mapSupabaseRowToProduct);
+    if (error && !isTableMissingError(error.message)) {
+      const { data: fbData, error: fbErr } = await sb.from('products').select('*');
+      if (!fbErr && fbData) {
+        return fbData.map(mapSupabaseRowToProduct);
+      }
+    }
+    // Fallback to Supabase Cloud Storage database
+    const cloudProducts = await readCloudTable<Product>('products');
+    return cloudProducts;
   } catch {
-    return null;
+    return await readCloudTable<Product>('products');
   }
 }
 
-export async function upsertSupabaseProduct(product: Product): Promise<{ ok: boolean; product?: Product; error?: string }> {
+export async function upsertSupabaseProduct(
+  product: Product,
+  fallbackCurrentList?: Product[]
+): Promise<{ ok: boolean; product?: Product; error?: string }> {
   const sb = getSupabaseAdmin() || getSupabase();
   if (!sb) return { ok: false, error: 'Supabase is not configured' };
+
+  const primaryImage =
+    product.image_url ||
+    product.imageUrl ||
+    (Array.isArray(product.images) && product.images.length > 0 ? product.images[0] : '');
+  const normalizedProduct: Product = {
+    ...product,
+    image_url: primaryImage,
+    imageUrl: primaryImage,
+    images: Array.isArray(product.images) && product.images.length > 0 ? product.images : primaryImage ? [primaryImage] : [],
+    updatedAt: new Date().toISOString(),
+  };
+
   try {
-    const row = mapProductToSupabaseRow(product);
+    const row = mapProductToSupabaseRow(normalizedProduct);
     const { data, error } = await sb.from('products').upsert(row, { onConflict: 'id' }).select('*').maybeSingle();
-    if (error) {
-      const coreWithId = mapProductToCoreSupabaseRow(product, true);
+    if (!error) {
+      const saved = data ? mapSupabaseRowToProduct(data) : normalizedProduct;
+      // Also mirror to cloud table for backup
+      const existingCloud = (await readCloudTable<Product>('products')) || fallbackCurrentList || [];
+      const idx = existingCloud.findIndex((p) => p.id === saved.id);
+      if (idx > -1) existingCloud[idx] = saved;
+      else existingCloud.unshift(saved);
+      await writeCloudTable('products', existingCloud);
+      return { ok: true, product: saved };
+    }
+
+    if (!isTableMissingError(error.message)) {
+      const coreWithId = mapProductToCoreSupabaseRow(normalizedProduct, true);
       const { data: fb1Data, error: fb1Err } = await sb.from('products').upsert(coreWithId, { onConflict: 'id' }).select('*').maybeSingle();
       if (!fb1Err) {
-        return { ok: true, product: fb1Data ? mapSupabaseRowToProduct(fb1Data) : product };
+        return { ok: true, product: fb1Data ? mapSupabaseRowToProduct(fb1Data) : normalizedProduct };
       }
-
-      const coreWithoutId = mapProductToCoreSupabaseRow(product, false);
-      if (product.id) {
-        const { data: existingRows } = await sb.from('products').select('id').eq('id', product.id).limit(1);
+      const coreWithoutId = mapProductToCoreSupabaseRow(normalizedProduct, false);
+      if (normalizedProduct.id) {
+        const { data: existingRows } = await sb.from('products').select('id').eq('id', normalizedProduct.id).limit(1);
         if (existingRows && existingRows.length > 0) {
-          const { data: updData, error: updErr } = await sb.from('products').update(coreWithoutId).eq('id', product.id).select('*').maybeSingle();
+          const { data: updData, error: updErr } = await sb.from('products').update(coreWithoutId).eq('id', normalizedProduct.id).select('*').maybeSingle();
           if (!updErr) {
-            return { ok: true, product: updData ? mapSupabaseRowToProduct(updData) : product };
+            return { ok: true, product: updData ? mapSupabaseRowToProduct(updData) : normalizedProduct };
           }
         }
       }
       const { data: insData, error: insErr } = await sb.from('products').insert(coreWithoutId).select('*').maybeSingle();
-      if (insErr) {
-        return { ok: false, error: insErr.message };
+      if (!insErr) {
+        return { ok: true, product: insData ? mapSupabaseRowToProduct(insData) : normalizedProduct };
       }
-      return { ok: true, product: insData ? mapSupabaseRowToProduct(insData) : product };
     }
-    return { ok: true, product: data ? mapSupabaseRowToProduct(data) : product };
+
+    // Persist to Supabase Cloud Bucket (`ma-group-database/products.json`)
+    const currentList = (await readCloudTable<Product>('products')) || fallbackCurrentList || [];
+    const idx = currentList.findIndex((p) => p.id === normalizedProduct.id);
+    if (idx > -1) {
+      currentList[idx] = normalizedProduct;
+    } else {
+      currentList.unshift(normalizedProduct);
+    }
+    const cloudWrite = await writeCloudTable('products', currentList);
+    if (!cloudWrite.ok) {
+      return { ok: false, error: cloudWrite.error || error.message };
+    }
+    return { ok: true, product: normalizedProduct };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'Unknown Supabase error' };
   }
 }
 
-export async function deleteSupabaseProductById(id: string): Promise<{ ok: boolean; error?: string }> {
+export async function deleteSupabaseProductById(
+  id: string,
+  fallbackCurrentList?: Product[]
+): Promise<{ ok: boolean; error?: string }> {
   const sb = getSupabaseAdmin() || getSupabase();
   if (!sb) return { ok: false, error: 'Supabase is not configured' };
   try {
     const { error } = await sb.from('products').delete().eq('id', id);
-    if (error) return { ok: false, error: error.message };
+    if (error && !isTableMissingError(error.message)) {
+      return { ok: false, error: error.message };
+    }
+    const currentList = (await readCloudTable<Product>('products')) || fallbackCurrentList;
+    if (currentList) {
+      const filtered = currentList.filter((p) => p.id !== id);
+      const cloudWrite = await writeCloudTable('products', filtered);
+      if (!cloudWrite.ok && error) {
+        return { ok: false, error: cloudWrite.error };
+      }
+    }
     return { ok: true };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'Failed to delete product' };
   }
 }
+
+// ============================================================================
+// CATEGORIES CRUD (SQL Table + Automatic Cloud Bucket Persistence)
+// ============================================================================
 
 export async function fetchAllSupabaseCategories(): Promise<Category[] | null> {
   const sb = getSupabaseAdmin() || getSupabase();
@@ -459,25 +636,41 @@ export async function fetchAllSupabaseCategories(): Promise<Category[] | null> {
       .from('categories')
       .select('*')
       .order('created_at', { ascending: true });
-    if (error) {
-      const { data: fallbackData, error: fallbackErr } = await sb.from('categories').select('*');
-      if (fallbackErr) return null;
-      return (fallbackData || []).map(mapSupabaseRowToCategory);
+    if (!error && data) {
+      return data.map(mapSupabaseRowToCategory);
     }
-    if (!data) return [];
-    return data.map(mapSupabaseRowToCategory);
+    if (error && !isTableMissingError(error.message)) {
+      const { data: fallbackData, error: fallbackErr } = await sb.from('categories').select('*');
+      if (!fallbackErr && fallbackData) {
+        return fallbackData.map(mapSupabaseRowToCategory);
+      }
+    }
+    return await readCloudTable<Category>('categories');
   } catch {
-    return null;
+    return await readCloudTable<Category>('categories');
   }
 }
 
-export async function upsertSupabaseCategory(category: Category): Promise<{ ok: boolean; category?: Category; error?: string }> {
+export async function upsertSupabaseCategory(
+  category: Category,
+  fallbackCurrentList?: Category[]
+): Promise<{ ok: boolean; category?: Category; error?: string }> {
   const sb = getSupabaseAdmin() || getSupabase();
   if (!sb) return { ok: false, error: 'Supabase is not configured' };
   try {
     const row = mapCategoryToSupabaseRow(category);
     const { data, error } = await sb.from('categories').upsert(row, { onConflict: 'id' }).select('*').maybeSingle();
-    if (error) {
+    if (!error) {
+      const saved = data ? mapSupabaseRowToCategory(data) : category;
+      const existingCloud = (await readCloudTable<Category>('categories')) || fallbackCurrentList || [];
+      const idx = existingCloud.findIndex((c) => c.id === saved.id);
+      if (idx > -1) existingCloud[idx] = saved;
+      else existingCloud.push(saved);
+      await writeCloudTable('categories', existingCloud);
+      return { ok: true, category: saved };
+    }
+
+    if (!isTableMissingError(error.message)) {
       const minimalWithId = {
         id: category.id,
         name: category.name,
@@ -488,46 +681,50 @@ export async function upsertSupabaseCategory(category: Category): Promise<{ ok: 
       if (!fb1Err) {
         return { ok: true, category: fb1Data ? { ...category, ...mapSupabaseRowToCategory(fb1Data), image: category.image || fb1Data.image_url || '' } : category };
       }
-
-      const minimalNoId = {
-        name: category.name,
-        slug: category.slug,
-        description: category.description || '',
-      };
-      if (category.id) {
-        const { data: existing } = await sb.from('categories').select('id').eq('id', category.id).limit(1);
-        if (existing && existing.length > 0) {
-          const { data: updData, error: updErr } = await sb.from('categories').update(minimalNoId).eq('id', category.id).select('*').maybeSingle();
-          if (!updErr) {
-            return { ok: true, category: updData ? { ...category, id: String(updData.id) } : category };
-          }
-        }
-      }
-      const { data: insData, error: insErr } = await sb.from('categories').insert(minimalNoId).select('*').maybeSingle();
-      if (insErr) {
-        const { data: nameOnlyData, error: nameOnlyErr } = await sb.from('categories').insert({ name: category.name }).select('*').maybeSingle();
-        if (nameOnlyErr) return { ok: false, error: insErr.message };
-        return { ok: true, category: nameOnlyData ? { ...category, id: String(nameOnlyData.id) } : category };
-      }
-      return { ok: true, category: insData ? { ...category, id: String(insData.id) } : category };
     }
-    return { ok: true, category: data ? mapSupabaseRowToCategory(data) : category };
+
+    const currentList = (await readCloudTable<Category>('categories')) || fallbackCurrentList || [];
+    const idx = currentList.findIndex((c) => c.id === category.id);
+    if (idx > -1) currentList[idx] = category;
+    else currentList.push(category);
+    const cloudWrite = await writeCloudTable('categories', currentList);
+    if (!cloudWrite.ok) {
+      return { ok: false, error: cloudWrite.error || error.message };
+    }
+    return { ok: true, category };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'Failed to save category' };
   }
 }
 
-export async function deleteSupabaseCategoryById(id: string): Promise<{ ok: boolean; error?: string }> {
+export async function deleteSupabaseCategoryById(
+  id: string,
+  fallbackCurrentList?: Category[]
+): Promise<{ ok: boolean; error?: string }> {
   const sb = getSupabaseAdmin() || getSupabase();
   if (!sb) return { ok: false, error: 'Supabase is not configured' };
   try {
     const { error } = await sb.from('categories').delete().eq('id', id);
-    if (error) return { ok: false, error: error.message };
+    if (error && !isTableMissingError(error.message)) {
+      return { ok: false, error: error.message };
+    }
+    const currentList = (await readCloudTable<Category>('categories')) || fallbackCurrentList;
+    if (currentList) {
+      const filtered = currentList.filter((c) => c.id !== id);
+      const cloudWrite = await writeCloudTable('categories', filtered);
+      if (!cloudWrite.ok && error) {
+        return { ok: false, error: cloudWrite.error };
+      }
+    }
     return { ok: true };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'Failed to delete category' };
   }
 }
+
+// ============================================================================
+// ORDERS CRUD (SQL Table + Automatic Cloud Bucket Persistence)
+// ============================================================================
 
 export async function fetchAllSupabaseOrders(): Promise<Order[] | null> {
   const sb = getSupabaseAdmin() || getSupabase();
@@ -537,57 +734,81 @@ export async function fetchAllSupabaseOrders(): Promise<Order[] | null> {
       .from('orders')
       .select('*')
       .order('created_at', { ascending: false });
-    if (error) {
-      const { data: fallbackData, error: fallbackErr } = await sb.from('orders').select('*');
-      if (fallbackErr) return null;
-      return (fallbackData || []).map(mapSupabaseRowToOrder);
+    if (!error && data) {
+      return data.map(mapSupabaseRowToOrder);
     }
-    if (!data) return [];
-    return data.map(mapSupabaseRowToOrder);
+    if (error && !isTableMissingError(error.message)) {
+      const { data: fallbackData, error: fallbackErr } = await sb.from('orders').select('*');
+      if (!fallbackErr && fallbackData) {
+        return fallbackData.map(mapSupabaseRowToOrder);
+      }
+    }
+    return await readCloudTable<Order>('orders');
   } catch {
-    return null;
+    return await readCloudTable<Order>('orders');
   }
 }
 
-export async function upsertSupabaseOrder(order: Order): Promise<{ ok: boolean; order?: Order; error?: string }> {
+export async function upsertSupabaseOrder(
+  order: Order,
+  fallbackCurrentList?: Order[]
+): Promise<{ ok: boolean; order?: Order; error?: string }> {
   const sb = getSupabaseAdmin() || getSupabase();
   if (!sb) return { ok: false, error: 'Supabase is not configured' };
   try {
     const row = mapOrderToSupabaseRow(order);
     const { data, error } = await sb.from('orders').upsert(row, { onConflict: 'id' }).select('*').maybeSingle();
-    if (error) {
+    if (!error) {
+      const saved = data ? mapSupabaseRowToOrder(data) : order;
+      const existingCloud = (await readCloudTable<Order>('orders')) || fallbackCurrentList || [];
+      const idx = existingCloud.findIndex((o) => o.id === saved.id);
+      if (idx > -1) existingCloud[idx] = saved;
+      else existingCloud.unshift(saved);
+      await writeCloudTable('orders', existingCloud);
+      return { ok: true, order: saved };
+    }
+
+    if (!isTableMissingError(error.message)) {
       const coreWithId = mapOrderToCoreSupabaseRow(order, true);
       const { data: fb1Data, error: fb1Err } = await sb.from('orders').upsert(coreWithId, { onConflict: 'id' }).select('*').maybeSingle();
       if (!fb1Err) {
         return { ok: true, order: fb1Data ? mapSupabaseRowToOrder(fb1Data) : order };
       }
-
-      const coreNoId = mapOrderToCoreSupabaseRow(order, false);
-      if (order.id) {
-        const { data: existing } = await sb.from('orders').select('id').eq('id', order.id).limit(1);
-        if (existing && existing.length > 0) {
-          const { data: updData, error: updErr } = await sb.from('orders').update(coreNoId).eq('id', order.id).select('*').maybeSingle();
-          if (!updErr) {
-            return { ok: true, order: updData ? mapSupabaseRowToOrder(updData) : order };
-          }
-        }
-      }
-      const { data: insData, error: insErr } = await sb.from('orders').insert(coreNoId).select('*').maybeSingle();
-      if (insErr) return { ok: false, error: insErr.message };
-      return { ok: true, order: insData ? mapSupabaseRowToOrder(insData) : order };
     }
-    return { ok: true, order: data ? mapSupabaseRowToOrder(data) : order };
+
+    const currentList = (await readCloudTable<Order>('orders')) || fallbackCurrentList || [];
+    const idx = currentList.findIndex((o) => o.id === order.id);
+    if (idx > -1) currentList[idx] = order;
+    else currentList.unshift(order);
+    const cloudWrite = await writeCloudTable('orders', currentList);
+    if (!cloudWrite.ok) {
+      return { ok: false, error: cloudWrite.error || error.message };
+    }
+    return { ok: true, order };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'Failed to save order' };
   }
 }
 
-export async function deleteSupabaseOrderById(id: string): Promise<{ ok: boolean; error?: string }> {
+export async function deleteSupabaseOrderById(
+  id: string,
+  fallbackCurrentList?: Order[]
+): Promise<{ ok: boolean; error?: string }> {
   const sb = getSupabaseAdmin() || getSupabase();
   if (!sb) return { ok: false, error: 'Supabase is not configured' };
   try {
     const { error } = await sb.from('orders').delete().eq('id', id);
-    if (error) return { ok: false, error: error.message };
+    if (error && !isTableMissingError(error.message)) {
+      return { ok: false, error: error.message };
+    }
+    const currentList = (await readCloudTable<Order>('orders')) || fallbackCurrentList;
+    if (currentList) {
+      const filtered = currentList.filter((o) => o.id !== id);
+      const cloudWrite = await writeCloudTable('orders', filtered);
+      if (!cloudWrite.ok && error) {
+        return { ok: false, error: cloudWrite.error };
+      }
+    }
     return { ok: true };
   } catch (err: any) {
     return { ok: false, error: err?.message || 'Failed to delete order' };
@@ -599,11 +820,12 @@ export async function fetchSupabaseTableData<T>(tableName: string): Promise<T[] 
   if (!sb) return null;
   try {
     const { data, error } = await sb.from(tableName).select('*');
-    if (error) return null;
-    if (!data) return [];
-    return data.map((row: any) => (row.data && typeof row.data === 'object' ? { ...row.data, id: row.id } : row)) as T[];
+    if (!error && data) {
+      return data.map((row: any) => (row.data && typeof row.data === 'object' ? { ...row.data, id: row.id } : row)) as T[];
+    }
+    return await readCloudTable<T>(tableName);
   } catch {
-    return null;
+    return await readCloudTable<T>(tableName);
   }
 }
 
@@ -612,7 +834,12 @@ export async function upsertSupabaseGenericRow(tableName: string, id: string, it
   if (!sb) return false;
   try {
     const { error } = await sb.from(tableName).upsert({ id, data: item });
-    return !error;
+    if (!error) {
+      await writeCloudTable(tableName, [{ id, ...item }]);
+      return true;
+    }
+    const cloudRes = await writeCloudTable(tableName, [{ id, ...item }]);
+    return cloudRes.ok;
   } catch {
     return false;
   }
@@ -698,17 +925,6 @@ export async function deleteImageFromSupabaseStorage(
   }
 }
 
-function isTableMissingError(err?: string): boolean {
-  if (!err) return false;
-  const lower = err.toLowerCase();
-  return (
-    lower.includes('not found') ||
-    lower.includes('schema cache') ||
-    lower.includes('could not find the table') ||
-    lower.includes('relation') && lower.includes('does not exist')
-  );
-}
-
 /**
  * Unified Supabase Service singleton used by server/app.ts
  */
@@ -724,60 +940,48 @@ export const supabaseService = {
       hasAnonKey: Boolean(getSupabaseAnonKey()),
       hasServiceRoleKey: Boolean(getSupabaseServiceRoleKey()),
       storageBucket: 'product-images',
+      cloudDatabaseBucket: DB_BUCKET,
     };
   },
 
-  async getProducts(): Promise<Product[] | null> {
-    return fetchAllSupabaseProducts();
+  async getProducts(fallbackSeed?: Product[]): Promise<Product[] | null> {
+    const list = await fetchAllSupabaseProducts();
+    if (list !== null) return list;
+    if (fallbackSeed && fallbackSeed.length > 0 && isSupabaseConfigured()) {
+      await writeCloudTable('products', fallbackSeed);
+      return fallbackSeed;
+    }
+    return null;
   },
 
-  async insertProduct(product: Product): Promise<{ success: boolean; data?: Product; error?: string; tableMissing?: boolean }> {
-    const res = await upsertSupabaseProduct(product);
+  async insertProduct(product: Product, fallbackCurrentList?: Product[]): Promise<{ success: boolean; data?: Product; error?: string; tableMissing?: boolean }> {
+    const res = await upsertSupabaseProduct(product, fallbackCurrentList);
     return {
       success: res.ok,
       data: res.product || product,
       error: res.error,
-      tableMissing: isTableMissingError(res.error),
+      tableMissing: false,
     };
   },
 
-  async updateProduct(id: string, updates: Partial<Product>, existingProduct?: Product): Promise<{ success: boolean; data?: Product; error?: string; tableMissing?: boolean }> {
+  async updateProduct(id: string, updates: Partial<Product>, existingProduct?: Product, fallbackCurrentList?: Product[]): Promise<{ success: boolean; data?: Product; error?: string; tableMissing?: boolean }> {
     const sb = getSupabaseAdmin() || getSupabase();
     if (!sb) return { success: false, error: 'Supabase not configured' };
 
     let base: Product | undefined = existingProduct;
     if (!base) {
-      const { data: row } = await sb.from('products').select('*').eq('id', id).maybeSingle();
-      if (row) {
-        base = mapSupabaseRowToProduct(row);
+      const all = await fetchAllSupabaseProducts();
+      if (all) {
+        base = all.find((p) => p.id === id);
       }
     }
 
+    if (!base) {
+      return { success: false, error: `Product ${id} not found in Supabase.` };
+    }
+
     const merged: Product = {
-      ...(base || ({
-        id,
-        name: updates.name || 'Product',
-        slug: updates.slug || 'product',
-        sku: updates.sku || `SKU-${id}`,
-        categoryId: updates.categoryId || 'cat-solar',
-        categoryName: updates.categoryName || 'Solar Products & Equipment',
-        brand: updates.brand || 'M.A. Group',
-        description: updates.description || '',
-        shortDescription: updates.shortDescription || '',
-        specifications: updates.specifications || [],
-        features: updates.features || [],
-        images: updates.images || [],
-        price: Number(updates.price ?? 0),
-        stock: Number(updates.stock ?? 0),
-        lowStockThreshold: 5,
-        warranty: 'Official Warranty',
-        tags: [],
-        status: 'active',
-        rating: 4.8,
-        reviewCount: 10,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      } as Product)),
+      ...base,
       ...updates,
       id,
       updatedAt: new Date().toISOString(),
@@ -797,107 +1001,113 @@ export const supabaseService = {
       merged.imageUrl = updates.images[0];
     }
 
-    const res = await upsertSupabaseProduct(merged);
+    const res = await upsertSupabaseProduct(merged, fallbackCurrentList);
     return {
       success: res.ok,
       data: res.product || merged,
       error: res.error,
-      tableMissing: isTableMissingError(res.error),
+      tableMissing: false,
     };
   },
 
-  async deleteProduct(id: string): Promise<{ success: boolean; error?: string; tableMissing?: boolean }> {
-    const res = await deleteSupabaseProductById(id);
+  async deleteProduct(id: string, fallbackCurrentList?: Product[]): Promise<{ success: boolean; error?: string; tableMissing?: boolean }> {
+    const res = await deleteSupabaseProductById(id, fallbackCurrentList);
     return {
       success: res.ok,
       error: res.error,
-      tableMissing: isTableMissingError(res.error),
+      tableMissing: false,
     };
   },
 
-  async getCategories(): Promise<Category[] | null> {
-    return fetchAllSupabaseCategories();
+  async getCategories(fallbackSeed?: Category[]): Promise<Category[] | null> {
+    const list = await fetchAllSupabaseCategories();
+    if (list !== null) return list;
+    if (fallbackSeed && fallbackSeed.length > 0 && isSupabaseConfigured()) {
+      await writeCloudTable('categories', fallbackSeed);
+      return fallbackSeed;
+    }
+    return null;
   },
 
-  async insertCategory(category: Category): Promise<{ success: boolean; data?: Category; error?: string; tableMissing?: boolean }> {
-    const res = await upsertSupabaseCategory(category);
+  async insertCategory(category: Category, fallbackCurrentList?: Category[]): Promise<{ success: boolean; data?: Category; error?: string; tableMissing?: boolean }> {
+    const res = await upsertSupabaseCategory(category, fallbackCurrentList);
     return {
       success: res.ok,
       data: res.category || category,
       error: res.error,
-      tableMissing: isTableMissingError(res.error),
+      tableMissing: false,
     };
   },
 
-  async updateCategory(id: string, updates: Partial<Category>, existingCategory?: Category): Promise<{ success: boolean; data?: Category; error?: string; tableMissing?: boolean }> {
+  async updateCategory(id: string, updates: Partial<Category>, existingCategory?: Category, fallbackCurrentList?: Category[]): Promise<{ success: boolean; data?: Category; error?: string; tableMissing?: boolean }> {
     const sb = getSupabaseAdmin() || getSupabase();
     if (!sb) return { success: false, error: 'Supabase not configured' };
 
     let base: Category | undefined = existingCategory;
     if (!base) {
-      const { data: row } = await sb.from('categories').select('*').eq('id', id).maybeSingle();
-      if (row) {
-        base = mapSupabaseRowToCategory(row);
+      const all = await fetchAllSupabaseCategories();
+      if (all) {
+        base = all.find((c) => c.id === id);
       }
     }
 
+    if (!base) {
+      return { success: false, error: `Category ${id} not found in Supabase.` };
+    }
+
     const merged: Category = {
-      ...(base || ({
-        id,
-        name: updates.name || 'Category',
-        slug: updates.slug || 'category',
-        description: updates.description || '',
-        image: updates.image || '',
-        iconName: updates.iconName || 'Zap',
-        displayOrder: updates.displayOrder ?? 1,
-        isActive: updates.isActive ?? true,
-        subcategories: updates.subcategories || [],
-      } as Category)),
+      ...base,
       ...updates,
       id,
     };
 
-    const res = await upsertSupabaseCategory(merged);
+    const res = await upsertSupabaseCategory(merged, fallbackCurrentList);
     return {
       success: res.ok,
       data: res.category || merged,
       error: res.error,
-      tableMissing: isTableMissingError(res.error),
+      tableMissing: false,
     };
   },
 
-  async deleteCategory(id: string): Promise<{ success: boolean; error?: string; tableMissing?: boolean }> {
-    const res = await deleteSupabaseCategoryById(id);
+  async deleteCategory(id: string, fallbackCurrentList?: Category[]): Promise<{ success: boolean; error?: string; tableMissing?: boolean }> {
+    const res = await deleteSupabaseCategoryById(id, fallbackCurrentList);
     return {
       success: res.ok,
       error: res.error,
-      tableMissing: isTableMissingError(res.error),
+      tableMissing: false,
     };
   },
 
-  async getOrders(): Promise<Order[] | null> {
-    return fetchAllSupabaseOrders();
+  async getOrders(fallbackSeed?: Order[]): Promise<Order[] | null> {
+    const list = await fetchAllSupabaseOrders();
+    if (list !== null) return list;
+    if (fallbackSeed && isSupabaseConfigured()) {
+      await writeCloudTable('orders', fallbackSeed);
+      return fallbackSeed;
+    }
+    return null;
   },
 
-  async insertOrder(order: Order): Promise<{ success: boolean; data?: Order; error?: string; tableMissing?: boolean }> {
-    const res = await upsertSupabaseOrder(order);
+  async insertOrder(order: Order, fallbackCurrentList?: Order[]): Promise<{ success: boolean; data?: Order; error?: string; tableMissing?: boolean }> {
+    const res = await upsertSupabaseOrder(order, fallbackCurrentList);
     return {
       success: res.ok,
       data: res.order || order,
       error: res.error,
-      tableMissing: isTableMissingError(res.error),
+      tableMissing: false,
     };
   },
 
-  async updateOrder(id: string, updates: Partial<Order>, existingOrder?: Order): Promise<{ success: boolean; data?: Order; error?: string; tableMissing?: boolean }> {
+  async updateOrder(id: string, updates: Partial<Order>, existingOrder?: Order, fallbackCurrentList?: Order[]): Promise<{ success: boolean; data?: Order; error?: string; tableMissing?: boolean }> {
     const sb = getSupabaseAdmin() || getSupabase();
     if (!sb) return { success: false, error: 'Supabase not configured' };
 
     let base: Order | undefined = existingOrder;
     if (!base) {
-      const { data: row } = await sb.from('orders').select('*').eq('id', id).maybeSingle();
-      if (row) {
-        base = mapSupabaseRowToOrder(row);
+      const all = await fetchAllSupabaseOrders();
+      if (all) {
+        base = all.find((o) => o.id === id || o.orderNumber.toLowerCase() === id.toLowerCase());
       }
     }
 
@@ -912,21 +1122,21 @@ export const supabaseService = {
       updatedAt: new Date().toISOString(),
     };
 
-    const res = await upsertSupabaseOrder(merged);
+    const res = await upsertSupabaseOrder(merged, fallbackCurrentList);
     return {
       success: res.ok,
       data: res.order || merged,
       error: res.error,
-      tableMissing: isTableMissingError(res.error),
+      tableMissing: false,
     };
   },
 
-  async deleteOrder(id: string): Promise<{ success: boolean; error?: string; tableMissing?: boolean }> {
-    const res = await deleteSupabaseOrderById(id);
+  async deleteOrder(id: string, fallbackCurrentList?: Order[]): Promise<{ success: boolean; error?: string; tableMissing?: boolean }> {
+    const res = await deleteSupabaseOrderById(id, fallbackCurrentList);
     return {
       success: res.ok,
       error: res.error,
-      tableMissing: isTableMissingError(res.error),
+      tableMissing: false,
     };
   },
 

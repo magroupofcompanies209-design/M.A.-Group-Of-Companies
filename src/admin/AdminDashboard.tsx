@@ -2,6 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from '../context/StoreContext';
 import { safeJsonResponse } from '../utils/api';
 import {
+  supabase,
+  isFrontendSupabaseConfigured,
+  insertOrUpdateProductInSupabase,
+  deleteProductInSupabase,
+  insertOrUpdateCategoryInSupabase,
+  deleteCategoryInSupabase,
+  uploadImageDirectlyToSupabaseStorage,
+} from '../lib/supabaseClient';
+import {
   Product,
   Category,
   Order,
@@ -235,6 +244,7 @@ export const AdminDashboard: React.FC = () => {
 
   const loadAdminData = async () => {
     try {
+      await Promise.all([refreshProducts(), refreshCategories()]);
       const [ordRes, banRes, coupRes, inqRes, logRes, anaRes, setRes, ledgRes, custRes] = await Promise.all([
         adminFetch('/api/orders').then((r) => safeJsonResponse(r, [])),
         adminFetch('/api/banners').then((r) => safeJsonResponse(r, [])),
@@ -374,6 +384,22 @@ export const AdminDashboard: React.FC = () => {
     setIsUploadingImage(true);
 
     try {
+      // 1. Try direct upload to Supabase Storage first if frontend client is configured
+      if (isFrontendSupabaseConfigured && supabase) {
+        const directUpload = await uploadImageDirectlyToSupabaseStorage(file, 'product-images');
+        if (directUpload.ok && directUpload.publicUrl) {
+          setEditingProduct((prev) =>
+            prev ? { ...prev, images: [directUpload.publicUrl!], image_url: directUpload.publicUrl!, imageUrl: directUpload.publicUrl! } : null
+          );
+          setImageUploadError(null);
+          showToast('Image uploaded and stored in Supabase Storage.', 'success');
+          setIsUploadingImage(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          return;
+        }
+      }
+
+      // 2. Upload via backend /api/upload endpoint
       const reader = new FileReader();
       reader.onload = async () => {
         try {
@@ -394,7 +420,9 @@ export const AdminDashboard: React.FC = () => {
           }
 
           // Update image URL in editing product
-          setEditingProduct((prev) => (prev ? { ...prev, images: [data.url] } : null));
+          setEditingProduct((prev) =>
+            prev ? { ...prev, images: [data.url], image_url: data.url, imageUrl: data.url } : null
+          );
           setImageUploadError(null);
           showToast('Image uploaded and stored in Supabase Storage.', 'success');
         } catch (err: any) {
@@ -422,52 +450,122 @@ export const AdminDashboard: React.FC = () => {
   };
 
   const handleRemoveImage = () => {
-    setEditingProduct((prev) => (prev ? { ...prev, images: [] } : null));
+    setEditingProduct((prev) => (prev ? { ...prev, images: [], image_url: '', imageUrl: '' } : null));
     setImageUploadError(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingProduct || !editingProduct.name || !editingProduct.price) {
-      showToast('Please provide product title and price.', 'error');
+    if (!editingProduct || !editingProduct.name || !String(editingProduct.name).trim()) {
+      showToast('Product could not be saved: Product title is required.', 'error');
+      return;
+    }
+
+    const numPrice = Number(editingProduct.price);
+    if (isNaN(numPrice) || numPrice < 0) {
+      showToast('Product could not be saved: Valid price in PKR is required.', 'error');
       return;
     }
 
     setIsSavingProduct(true);
     try {
       const isNew = !editingProduct.id;
+      const productId = editingProduct.id || 'prod-' + Date.now();
+      const primaryImg =
+        editingProduct.images?.[0] ||
+        editingProduct.image_url ||
+        editingProduct.imageUrl ||
+        'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=800&q=80';
+
+      const productPayload: Product = {
+        id: productId,
+        name: editingProduct.name.trim(),
+        slug:
+          editingProduct.slug ||
+          editingProduct.name
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/(^-|-$)/g, ''),
+        sku: editingProduct.sku || `MAG-${Date.now().toString().slice(-5)}`,
+        categoryId: editingProduct.categoryId || categories[0]?.id || 'cat-solar',
+        categoryName: editingProduct.categoryName || categories[0]?.name || 'Solar Products & Equipment',
+        brand: editingProduct.brand || 'M.A. Certified',
+        price: numPrice,
+        salePrice: editingProduct.salePrice ? Number(editingProduct.salePrice) : undefined,
+        costPrice: editingProduct.costPrice ? Number(editingProduct.costPrice) : undefined,
+        stock: Number(editingProduct.stock ?? 0),
+        lowStockThreshold: Number(editingProduct.lowStockThreshold ?? 5),
+        warranty: editingProduct.warranty || 'Official M.A. Group Warranty',
+        description: editingProduct.description || '',
+        shortDescription:
+          editingProduct.shortDescription ||
+          (editingProduct.description ? String(editingProduct.description).slice(0, 140) : ''),
+        images: [primaryImg],
+        image_url: primaryImg,
+        imageUrl: primaryImg,
+        features: Array.isArray(editingProduct.features)
+          ? editingProduct.features
+          : ['High performance', 'Official Warranty'],
+        specifications: editingProduct.specifications || [{ key: 'Warranty', value: 'Manufacturer Warranty' }],
+        tags: Array.isArray(editingProduct.tags) ? editingProduct.tags : ['equipment'],
+        status: editingProduct.status || 'active',
+        isFeatured: Boolean(editingProduct.isFeatured),
+        isBestSeller: Boolean(editingProduct.isBestSeller),
+        rating: editingProduct.rating || 5.0,
+        reviewCount: editingProduct.reviewCount || 1,
+        createdAt: editingProduct.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      // 1. Direct Supabase INSERT/UPDATE if frontend client is configured
+      let savedViaDirectSupabase = false;
+      let directSupabaseError: string | undefined;
+      if (isFrontendSupabaseConfigured && supabase) {
+        const directRes = await insertOrUpdateProductInSupabase(productPayload, products);
+        if (directRes.ok) {
+          savedViaDirectSupabase = true;
+        } else {
+          directSupabaseError = directRes.error;
+        }
+      }
+
+      // 2. Also call backend API endpoint to persist via service-role key and sync server state
       const method = isNew ? 'POST' : 'PUT';
       const endpoint = isNew ? '/api/products' : `/api/products/${editingProduct.id}`;
 
       const res = await adminFetch(endpoint, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...editingProduct,
-          images: Array.isArray(editingProduct.images) ? editingProduct.images : [editingProduct.images || ''],
-          features: Array.isArray(editingProduct.features) ? editingProduct.features : ['High performance', 'Official Warranty'],
-          specifications: editingProduct.specifications || [{ key: 'Warranty', value: 'Manufacturer Warranty' }],
-          status: editingProduct.status || 'active',
-          rating: editingProduct.rating || 5.0,
-          reviewCount: editingProduct.reviewCount || 1,
-        }),
+        body: JSON.stringify(productPayload),
       });
 
       const resData = await safeJsonResponse(res, null);
 
-      if (!res.ok) {
-        const errorMsg = resData?.error || resData?.message || 'Failed to save product in database.';
-        throw new Error(errorMsg);
+      if (!res.ok && !savedViaDirectSupabase) {
+        const errorMsg =
+          resData?.error ||
+          resData?.message ||
+          directSupabaseError ||
+          'Supabase database connection error.';
+        const formattedErr = errorMsg.startsWith('Product could not be saved:')
+          ? errorMsg
+          : `Product could not be saved: ${errorMsg}`;
+        throw new Error(formattedErr);
       }
 
       await refreshProducts();
       await loadAdminData();
       setIsProductModalOpen(false);
       setEditingProduct(null);
-      showToast(`Product ${isNew ? 'created' : 'updated'} and permanently saved to Supabase.`, 'success');
+      showToast('Product saved successfully.', 'success');
     } catch (err: any) {
-      showToast(err.message || 'Error saving product to database', 'error');
+      const msg = err.message || 'Unknown Supabase error';
+      showToast(
+        msg.startsWith('Product could not be saved:') ? msg : `Product could not be saved: ${msg}`,
+        'error'
+      );
     } finally {
       setIsSavingProduct(false);
     }
@@ -533,10 +631,21 @@ export const AdminDashboard: React.FC = () => {
       else if (type === 'inquiry') endpoint = `/api/inquiries/${id}`;
       else if (type === 'staff') endpoint = `/api/admin/security/staff/${id}`;
 
+      let deletedDirectly = false;
+      if (isFrontendSupabaseConfigured && supabase) {
+        if (type === 'product') {
+          const dRes = await deleteProductInSupabase(id, products);
+          if (dRes.ok) deletedDirectly = true;
+        } else if (type === 'category') {
+          const dRes = await deleteCategoryInSupabase(id, categories);
+          if (dRes.ok) deletedDirectly = true;
+        }
+      }
+
       const res = await adminFetch(endpoint, { method: 'DELETE' });
       const data = await safeJsonResponse(res, null);
 
-      if (!res.ok || (data && data.success === false)) {
+      if ((!res.ok || (data && data.success === false)) && !deletedDirectly) {
         const errorMsg = data?.error || data?.message || `Failed to delete ${type}. Please check server connection.`;
         setDeleteModalError(errorMsg);
         showToast(errorMsg, 'error');
@@ -578,7 +687,7 @@ export const AdminDashboard: React.FC = () => {
   };
 
   // Category CRUD
-  const handleCategoryImageFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleCategoryImageFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -600,6 +709,18 @@ export const AdminDashboard: React.FC = () => {
 
     setIsUploadingCategoryImage(true);
     setCategoryImageUploadError(null);
+
+    if (isFrontendSupabaseConfigured && supabase) {
+      const directRes = await uploadImageDirectlyToSupabaseStorage(file, 'product-images');
+      if (directRes.ok && directRes.publicUrl) {
+        setEditingCategory((prev) => (prev ? { ...prev, image: directRes.publicUrl! } : null));
+        setCategoryImageUploadError(null);
+        showToast('Category image uploaded to Supabase Storage.', 'success');
+        setIsUploadingCategoryImage(false);
+        if (categoryFileInputRef.current) categoryFileInputRef.current.value = '';
+        return;
+      }
+    }
 
     const reader = new FileReader();
     reader.onload = async () => {
@@ -681,21 +802,40 @@ export const AdminDashboard: React.FC = () => {
     setIsSavingCategory(true);
     try {
       const isNew = !editingCategory.id;
+      const catPayload: Category = {
+        id: editingCategory.id || 'cat-' + Date.now(),
+        name: editingCategory.name.trim(),
+        slug:
+          editingCategory.slug ||
+          editingCategory.name
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/(^-|-$)/g, ''),
+        description: editingCategory.description || '',
+        image: editingCategory.image || '',
+        iconName: editingCategory.iconName || 'Zap',
+        displayOrder: Number(editingCategory.displayOrder) || 0,
+        isActive: editingCategory.isActive !== false,
+        subcategories: editingCategory.subcategories || [],
+      };
+
+      let savedCatDirect = false;
+      if (isFrontendSupabaseConfigured && supabase) {
+        const directRes = await insertOrUpdateCategoryInSupabase(catPayload, categories);
+        if (directRes.ok) savedCatDirect = true;
+      }
+
       const method = isNew ? 'POST' : 'PUT';
       const endpoint = isNew ? '/api/categories' : `/api/categories/${editingCategory.id}`;
 
       const res = await adminFetch(endpoint, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...editingCategory,
-          displayOrder: Number(editingCategory.displayOrder) || 0,
-          isActive: editingCategory.isActive !== false,
-          subcategories: editingCategory.subcategories || [],
-        }),
+        body: JSON.stringify(catPayload),
       });
 
-      if (!res.ok) {
+      if (!res.ok && !savedCatDirect) {
         const errData = await safeJsonResponse(res, { error: 'Failed to save category' });
         throw new Error(errData.error || 'Failed to save category');
       }
@@ -3545,6 +3685,44 @@ export const AdminDashboard: React.FC = () => {
                 />
               </div>
 
+              {/* Availability Status & Featured Status Toggles */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-2xl bg-neutral-950 border border-neutral-800">
+                <div className="space-y-1">
+                  <label className="font-bold text-neutral-300 block">Storefront Availability</label>
+                  <select
+                    value={editingProduct.status || 'active'}
+                    onChange={(e) =>
+                      setEditingProduct({
+                        ...editingProduct,
+                        status: e.target.value as Product['status'],
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-white cursor-pointer"
+                  >
+                    <option value="active">Active (Visible on Storefront)</option>
+                    <option value="inactive">Inactive (Hidden from Storefront)</option>
+                    <option value="archived">Archived</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1 flex flex-col justify-end">
+                  <label className="flex items-center justify-between px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 cursor-pointer">
+                    <span className="font-bold text-neutral-200">Featured Product</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(editingProduct.isFeatured)}
+                      onChange={(e) =>
+                        setEditingProduct({
+                          ...editingProduct,
+                          isFeatured: e.target.checked,
+                        })
+                      }
+                      className="rounded border-neutral-700 text-amber-500 focus:ring-0 w-4 h-4 cursor-pointer"
+                    />
+                  </label>
+                </div>
+              </div>
+
               <div className="flex justify-end gap-3 pt-4 border-t border-neutral-800">
                 <button
                   type="button"
@@ -3560,7 +3738,7 @@ export const AdminDashboard: React.FC = () => {
                   className="px-6 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold cursor-pointer flex items-center gap-2 disabled:opacity-50"
                 >
                   {isSavingProduct && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                  <span>{isSavingProduct ? 'Saving to Supabase...' : 'Save Product to Database'}</span>
+                  <span>{isSavingProduct ? 'Saving product...' : 'Save Product'}</span>
                 </button>
               </div>
             </form>

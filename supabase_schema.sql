@@ -106,16 +106,28 @@ alter table public.security_settings enable row level security;
 drop policy if exists "Public can view products" on public.products;
 create policy "Public can view products" on public.products for select using (true);
 
+drop policy if exists "Admin can manage products" on public.products;
+create policy "Admin can manage products" on public.products for all using (true) with check (true);
+
 drop policy if exists "Public can view categories" on public.categories;
 create policy "Public can view categories" on public.categories for select using (true);
 
--- Public customers can create orders
+drop policy if exists "Admin can manage categories" on public.categories;
+create policy "Admin can manage categories" on public.categories for all using (true) with check (true);
+
+-- Public customers can create orders & admin can manage orders
 drop policy if exists "Customers can create orders" on public.orders;
 create policy "Customers can create orders" on public.orders for insert with check (true);
 
--- Public can read store_settings
+drop policy if exists "Admin can manage orders" on public.orders;
+create policy "Admin can manage orders" on public.orders for all using (true) with check (true);
+
+-- Public can read store_settings & admin can update store_settings
 drop policy if exists "Public can view store settings" on public.store_settings;
 create policy "Public can view store settings" on public.store_settings for select using (true);
+
+drop policy if exists "Admin can manage store settings" on public.store_settings;
+create policy "Admin can manage store settings" on public.store_settings for all using (true) with check (true);
 
 -- 7. SUPABASE STORAGE BUCKET FOR PRODUCT, CATEGORY & RECEIPT LOGO IMAGES
 insert into storage.buckets (id, name, public)

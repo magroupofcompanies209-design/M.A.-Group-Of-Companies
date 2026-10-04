@@ -1,6 +1,10 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { safeJsonResponse } from '../utils/api';
 import {
+  fetchProductsFromSupabase,
+  fetchCategoriesFromSupabase,
+} from '../lib/supabaseClient';
+import {
   Product,
   Category,
   Brand,
@@ -205,11 +209,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     try {
       setLoading(true);
       const [prodsRes, catsRes, brandsRes, bannersRes, settingsRes] = await Promise.all([
-        fetch('/api/products').then((r) => safeJsonResponse(r, [])),
-        fetch('/api/categories').then((r) => safeJsonResponse(r, [])),
-        fetch('/api/brands').then((r) => safeJsonResponse(r, [])),
-        fetch('/api/banners').then((r) => safeJsonResponse(r, [])),
-        fetch('/api/settings').then((r) => safeJsonResponse(r, {})),
+        fetchProductsFromSupabase().catch(() =>
+          fetch(`/api/products?_t=${Date.now()}`, { cache: 'no-store' }).then((r) => safeJsonResponse(r, []))
+        ),
+        fetchCategoriesFromSupabase().catch(() =>
+          fetch(`/api/categories?_t=${Date.now()}`, { cache: 'no-store' }).then((r) => safeJsonResponse(r, []))
+        ),
+        fetch(`/api/brands?_t=${Date.now()}`, { cache: 'no-store' }).then((r) => safeJsonResponse(r, [])),
+        fetch(`/api/banners?_t=${Date.now()}`, { cache: 'no-store' }).then((r) => safeJsonResponse(r, [])),
+        fetch(`/api/settings?_t=${Date.now()}`, { cache: 'no-store' }).then((r) => safeJsonResponse(r, {})),
       ]);
 
       if (Array.isArray(prodsRes)) setProducts(prodsRes);
@@ -230,21 +238,31 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const refreshProducts = async () => {
     try {
-      const res = await fetch('/api/products');
-      const data = await safeJsonResponse(res, []);
+      const data = await fetchProductsFromSupabase();
       if (Array.isArray(data)) setProducts(data);
     } catch (e) {
-      console.error(e);
+      try {
+        const res = await fetch(`/api/products?_t=${Date.now()}`, { cache: 'no-store' });
+        const data = await safeJsonResponse(res, []);
+        if (Array.isArray(data)) setProducts(data);
+      } catch (err) {
+        console.error(err);
+      }
     }
   };
 
   const refreshCategories = async () => {
     try {
-      const res = await fetch('/api/categories');
-      const data = await safeJsonResponse(res, []);
+      const data = await fetchCategoriesFromSupabase();
       if (Array.isArray(data)) setCategories(data);
     } catch (e) {
-      console.error(e);
+      try {
+        const res = await fetch(`/api/categories?_t=${Date.now()}`, { cache: 'no-store' });
+        const data = await safeJsonResponse(res, []);
+        if (Array.isArray(data)) setCategories(data);
+      } catch (err) {
+        console.error(err);
+      }
     }
   };
 

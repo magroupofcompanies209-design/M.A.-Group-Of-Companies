@@ -258,13 +258,14 @@ app.delete('/api/admin/security/staff/:id', requireSuperAdminAuth, (req: Request
 
 // GET /api/products
 app.get('/api/products', async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   let products: Product[] = [];
 
   // 1. Fetch directly from Supabase if configured (single source of truth)
   if (supabaseService.isConfigured()) {
     try {
-      const supaProducts = await supabaseService.getProducts();
-      if (supaProducts && supaProducts.length > 0) {
+      const supaProducts = await supabaseService.getProducts(db.getProducts());
+      if (supaProducts !== null) {
         products = supaProducts;
         db.syncProducts(supaProducts);
       }
@@ -273,8 +274,8 @@ app.get('/api/products', async (req: Request, res: Response) => {
     }
   }
 
-  // 2. Fallback to local store if Supabase is empty or not yet configured
-  if (products.length === 0) {
+  // 2. Fallback to local store only if Supabase is not configured
+  if (products.length === 0 && !supabaseService.isConfigured()) {
     products = db.getProducts();
   }
 
@@ -418,99 +419,77 @@ app.post('/api/products', requireAdminAuth, async (req: Request, res: Response) 
     updatedAt: new Date().toISOString(),
   };
 
-  // 1. If Supabase is configured, insert and confirm database save
-  if (supabaseService.isConfigured()) {
-    const supaRes = await supabaseService.insertProduct(newProduct);
-    const isTableMissing =
-      supaRes.error &&
-      (supaRes.error.includes('not found') ||
-        supaRes.error.includes('schema cache') ||
-        supaRes.error.includes('Could not find the table'));
-
-    if (!supaRes.success && !isTableMissing) {
-      console.log('ℹ️ Supabase product insert notice:', supaRes.error);
-      return res.status(500).json({
-        success: false,
-        error: supaRes.error || 'Failed to save product in Supabase database.',
-      });
-    }
-
-    if (isTableMissing) {
-      const created = db.createProduct(newProduct);
-      db.logAction('CREATE_PRODUCT', (req as any).adminSession.username, `Created product (store): ${created.name} (${created.sku})`);
-      return res.status(201).json({
-        ...created,
-        notice: 'Saved to persistent local storage. Run supabase_schema.sql in your Supabase SQL Editor to sync to remote table.',
-      });
-    }
-
-    const savedProduct = supaRes.data || newProduct;
-    db.createProduct(savedProduct);
-    db.logAction('CREATE_PRODUCT', (req as any).adminSession.username, `Created product in Supabase: ${savedProduct.name} (${savedProduct.sku})`);
-    return res.status(201).json(savedProduct);
+  // 1. Require Supabase configuration for permanent database persistence
+  if (!supabaseService.isConfigured()) {
+    return res.status(500).json({
+      success: false,
+      error:
+        'Product could not be saved: Supabase is not configured on the server. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY) in Netlify Environment Variables.',
+    });
   }
 
-  // 2. If Supabase is not configured, fall back to local database
-  const created = db.createProduct(newProduct);
-  db.logAction('CREATE_PRODUCT', (req as any).adminSession.username, `Created product: ${created.name} (${created.sku})`);
-  return res.status(201).json(created);
+  const supaRes = await supabaseService.insertProduct(newProduct, db.getProducts());
+  if (!supaRes.success) {
+    console.error('❌ Supabase product insert failed:', supaRes.error);
+    return res.status(500).json({
+      success: false,
+      error: `Product could not be saved: ${supaRes.error || 'Failed to save product in Supabase database.'}`,
+    });
+  }
+
+  const savedProduct = supaRes.data || newProduct;
+  db.createProduct(savedProduct);
+  db.logAction('CREATE_PRODUCT', (req as any).adminSession.username, `Created product in Supabase: ${savedProduct.name} (${savedProduct.sku})`);
+  return res.status(201).json(savedProduct);
 });
 
 // PUT /api/products/:id (Admin Protected)
 app.put('/api/products/:id', requireAdminAuth, async (req: Request, res: Response) => {
   const id = req.params.id;
-  if (supabaseService.isConfigured()) {
-    try {
-      const supaProducts = await supabaseService.getProducts();
-      if (supaProducts && supaProducts.length > 0) {
-        db.syncProducts(supaProducts);
-      }
-    } catch {
-      // ignore
-    }
+  if (!supabaseService.isConfigured()) {
+    return res.status(500).json({
+      success: false,
+      error:
+        'Product could not be saved: Supabase is not configured on the server. Please set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY) in Netlify Environment Variables.',
+    });
   }
+
+  try {
+    const supaProducts = await supabaseService.getProducts();
+    if (supaProducts && supaProducts.length > 0) {
+      db.syncProducts(supaProducts);
+    }
+  } catch {
+    // ignore
+  }
+
   const existingProduct = db.getProductById(id);
   const oldImages = existingProduct?.images || (existingProduct?.imageUrl ? [existingProduct.imageUrl] : []);
 
-  if (supabaseService.isConfigured()) {
-    const supaRes = await supabaseService.updateProduct(id, req.body, existingProduct);
-    const isTableMissing =
-      supaRes.error &&
-      (supaRes.error.includes('not found') ||
-        supaRes.error.includes('schema cache') ||
-        supaRes.error.includes('Could not find the table'));
-
-    if (!supaRes.success && !isTableMissing) {
-      return res.status(500).json({
-        success: false,
-        error: supaRes.error || 'Failed to update product in Supabase.',
-      });
-    }
-
-    const updated = db.updateProduct(id, req.body);
-
-    const newImages = req.body.images || (req.body.imageUrl || req.body.image_url ? [req.body.imageUrl || req.body.image_url] : []);
-    for (const oldImg of oldImages) {
-      if (oldImg && oldImg.includes('/product-images/') && !newImages.includes(oldImg)) {
-        const isUsedElsewhere = db.getProducts().some(
-          (p) => p.id !== id && (p.images?.includes(oldImg) || p.imageUrl === oldImg)
-        );
-        if (!isUsedElsewhere) {
-          await supabaseService.deleteImage(oldImg);
-        }
-      }
-    }
-
-    db.logAction('UPDATE_PRODUCT', (req as any).adminSession.username, `Updated product: ${id}`);
-    return res.json(supaRes.data || updated);
+  const supaRes = await supabaseService.updateProduct(id, req.body, existingProduct, db.getProducts());
+  if (!supaRes.success) {
+    return res.status(500).json({
+      success: false,
+      error: `Product could not be saved: ${supaRes.error || 'Failed to update product in Supabase.'}`,
+    });
   }
 
   const updated = db.updateProduct(id, req.body);
-  if (!updated) {
-    return res.status(404).json({ error: 'Product not found' });
+
+  const newImages = req.body.images || (req.body.imageUrl || req.body.image_url ? [req.body.imageUrl || req.body.image_url] : []);
+  for (const oldImg of oldImages) {
+    if (oldImg && oldImg.includes('/product-images/') && !newImages.includes(oldImg)) {
+      const isUsedElsewhere = db.getProducts().some(
+        (p) => p.id !== id && (p.images?.includes(oldImg) || p.imageUrl === oldImg)
+      );
+      if (!isUsedElsewhere) {
+        await supabaseService.deleteImage(oldImg);
+      }
+    }
   }
-  db.logAction('UPDATE_PRODUCT', (req as any).adminSession.username, `Updated product: ${updated.name} (${updated.sku})`);
-  return res.json(updated);
+
+  db.logAction('UPDATE_PRODUCT', (req as any).adminSession.username, `Updated product: ${id}`);
+  return res.json(supaRes.data || updated);
 });
 
 // DELETE /api/products/:id (Admin/Superadmin Protected - Manager/Staff cannot delete products)
