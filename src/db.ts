@@ -9,7 +9,6 @@ export type {
   Brand,
   Order,
   OrderItem,
-  CustomerDetails,
   Coupon,
   Review,
   StoreSettings,
@@ -28,7 +27,6 @@ export {
   insertOrUpdateCategoryInSupabase,
   deleteCategoryInSupabase,
   fetchOrdersFromSupabase,
-  insertOrderInSupabase,
-  updateOrderInSupabase,
+  insertOrUpdateOrderInSupabase,
   deleteOrderInSupabase,
 } from './lib/supabaseClient';

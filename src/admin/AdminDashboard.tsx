@@ -12,6 +12,7 @@ import {
   insertOrUpdateOrderInSupabase,
   deleteOrderInSupabase,
   uploadImageDirectlyToSupabaseStorage,
+  saveSettingsInSupabase,
 } from '../lib/supabaseClient';
 import {
   Product,
@@ -66,14 +67,46 @@ import {
   Layers,
   BarChart3,
   UserCheck,
+  Award,
+  Building2,
+  Cpu,
+  Flame,
+  Wrench,
 } from 'lucide-react';
 import { PrintReceiptModal } from '../components/common/PrintReceiptModal';
 import { InventoryTab } from './InventoryTab';
 import { CustomersTab } from './CustomersTab';
 import { AnalyticsTab } from './AnalyticsTab';
+import { PartnersTab } from './PartnersTab';
+import { AiAssistantTab } from './AiAssistantTab';
+import { CompanyProfileTab } from './CompanyProfileTab';
+import { SmartOffersTab } from './SmartOffersTab';
+import { SolutionsTab } from './SolutionsTab';
+import { DeliveryManagementTab } from './DeliveryManagementTab';
+import { AfterSalesServiceTab } from './AfterSalesServiceTab';
 
 export const AdminDashboard: React.FC = () => {
-  const { products, categories, refreshProducts, refreshCategories, refreshBanners, refreshSettings, showToast } = useStore();
+  const {
+    products,
+    categories,
+    brands,
+    companyPages,
+    smartOffers,
+    coupons: storeCoupons,
+    solutionPackages,
+    settings,
+    refreshProducts,
+    refreshCategories,
+    refreshPartners,
+    refreshCompanyPages,
+    refreshSmartOffers,
+    refreshCoupons,
+    refreshSolutions,
+    refreshBanners,
+    refreshSettings,
+    showToast,
+    navigate,
+  } = useStore();
 
   // Authentication State
   const [adminToken, setAdminToken] = useState<string>(() => localStorage.getItem('ma_admin_token') || '');
@@ -92,6 +125,12 @@ export const AdminDashboard: React.FC = () => {
     | 'overview'
     | 'products'
     | 'categories'
+    | 'partners'
+    | 'company-profile'
+    | 'smart-offers'
+    | 'solutions'
+    | 'delivery'
+    | 'after-sales'
     | 'inventory'
     | 'orders'
     | 'customers'
@@ -104,6 +143,10 @@ export const AdminDashboard: React.FC = () => {
     | 'audit-logs'
     | 'security'
   >('overview');
+
+  // Admin Delivery Override State for Order Modal
+  const [overrideAmountInput, setOverrideAmountInput] = useState<string>('');
+  const [overrideReasonInput, setOverrideReasonInput] = useState<string>('');
 
   // Admin Data states
   const [orders, setOrders] = useState<Order[]>([]);
@@ -247,7 +290,7 @@ export const AdminDashboard: React.FC = () => {
 
   const loadAdminData = async () => {
     try {
-      await Promise.all([refreshProducts(), refreshCategories()]);
+      await Promise.all([refreshProducts(), refreshCategories(), refreshPartners()]);
       const [ordRes, banRes, coupRes, inqRes, logRes, anaRes, setRes, ledgRes, custRes] = await Promise.all([
         fetchOrdersFromSupabase()
           .then(async (supaOrders) => {
@@ -527,6 +570,8 @@ export const AdminDashboard: React.FC = () => {
         sku: editingProduct.sku || `MAG-${Date.now().toString().slice(-5)}`,
         categoryId: editingProduct.categoryId || categories[0]?.id || 'cat-solar',
         categoryName: editingProduct.categoryName || categories[0]?.name || 'Solar Products & Equipment',
+        subcategoryId: editingProduct.subcategoryId || undefined,
+        subcategoryName: editingProduct.subcategoryName || undefined,
         brand: editingProduct.brand || 'M.A. Certified',
         price: numPrice,
         salePrice: editingProduct.salePrice ? Number(editingProduct.salePrice) : undefined,
@@ -547,8 +592,10 @@ export const AdminDashboard: React.FC = () => {
         specifications: editingProduct.specifications || [{ key: 'Warranty', value: 'Manufacturer Warranty' }],
         tags: Array.isArray(editingProduct.tags) ? editingProduct.tags : ['equipment'],
         status: editingProduct.status || 'active',
+        isActive: editingProduct.status === 'inactive' ? false : editingProduct.isActive !== false,
         isFeatured: Boolean(editingProduct.isFeatured),
         isBestSeller: Boolean(editingProduct.isBestSeller),
+        isNewArrival: Boolean(editingProduct.isNewArrival),
         rating: editingProduct.rating || 5.0,
         reviewCount: editingProduct.reviewCount || 1,
         createdAt: editingProduct.createdAt || new Date().toISOString(),
@@ -1226,16 +1273,16 @@ export const AdminDashboard: React.FC = () => {
   // If Not Authenticated: Render Secure Login Screen
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-neutral-950 flex items-center justify-center p-4">
-        <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-8 shadow-2xl space-y-6">
+      <div className="min-h-screen bg-[#0D0E10] flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-[#151C2C] border border-[#C9B27C]/30 rounded-2xl p-8 sm:p-10 shadow-2xl space-y-6">
           <div className="text-center space-y-2">
-            <div className="w-14 h-14 rounded-2xl bg-neutral-950 border border-amber-500/40 text-amber-400 mx-auto flex items-center justify-center font-black text-2xl shadow-lg">
-              M.A.
+            <div className="w-14 h-14 rounded-xl bg-[#0D0E10] border border-[#C9B27C]/50 text-[#C9B27C] mx-auto flex items-center justify-center font-serif font-bold text-2xl shadow-lg">
+              M.A
             </div>
-            <h1 className="text-xl font-black text-white tracking-tight uppercase">
-              Management Portal
+            <h1 className="font-serif text-2xl font-bold text-[#FCFBF8] tracking-wide">
+              Executive Management Portal
             </h1>
-            <p className="text-xs text-neutral-400">
+            <p className="text-xs text-[#B8B9BC]">
               Restricted to authorized M.A. GROUP OF COMPANIES personnel.
             </p>
           </div>
@@ -1248,14 +1295,14 @@ export const AdminDashboard: React.FC = () => {
           )}
 
           {/* Login Mode Switch */}
-          <div className="grid grid-cols-2 gap-1 p-1 bg-neutral-950 rounded-xl border border-neutral-800 text-xs font-bold">
+          <div className="grid grid-cols-2 gap-1 p-1 bg-[#0D0E10] rounded-xl border border-[#C9B27C]/20 text-xs font-semibold">
             <button
               onClick={() => {
                 setLoginMethod('secret');
                 setLoginError('');
               }}
-              className={`py-2 rounded-lg transition-colors ${
-                loginMethod === 'secret' ? 'bg-amber-500 text-neutral-950' : 'text-neutral-400 hover:text-white'
+              className={`py-2.5 rounded-lg transition-colors cursor-pointer ${
+                loginMethod === 'secret' ? 'bg-[#C9B27C] text-[#0D0E10] font-bold' : 'text-[#B8B9BC] hover:text-[#FCFBF8]'
               }`}
             >
               Master Secret
@@ -1265,8 +1312,8 @@ export const AdminDashboard: React.FC = () => {
                 setLoginMethod('credentials');
                 setLoginError('');
               }}
-              className={`py-2 rounded-lg transition-colors ${
-                loginMethod === 'credentials' ? 'bg-amber-500 text-neutral-950' : 'text-neutral-400 hover:text-white'
+              className={`py-2.5 rounded-lg transition-colors cursor-pointer ${
+                loginMethod === 'credentials' ? 'bg-[#C9B27C] text-[#0D0E10] font-bold' : 'text-[#B8B9BC] hover:text-[#FCFBF8]'
               }`}
             >
               Staff Credentials
@@ -1276,7 +1323,7 @@ export const AdminDashboard: React.FC = () => {
           <form onSubmit={handleLogin} className="space-y-4 text-xs">
             {loginMethod === 'secret' ? (
               <div className="space-y-1.5">
-                <label className="text-neutral-300 font-bold uppercase tracking-wider block">
+                <label className="text-[#FCFBF8] font-semibold uppercase tracking-[0.14em] text-[11px] block">
                   Administrator Master Secret
                 </label>
                 <div className="relative">
@@ -1286,36 +1333,36 @@ export const AdminDashboard: React.FC = () => {
                     value={masterSecretInput}
                     onChange={(e) => setMasterSecretInput(e.target.value)}
                     placeholder="Enter Master Secret..."
-                    className="w-full pl-9 pr-3 py-3 rounded-xl bg-neutral-950 border border-neutral-800 text-white focus:outline-none focus:border-amber-500 font-mono"
+                    className="w-full pl-9 pr-3 py-3 rounded-xl bg-[#0D0E10] border border-[#C9B27C]/25 text-[#FCFBF8] focus:outline-none focus:border-[#C9B27C] font-mono"
                   />
-                  <Lock className="w-4 h-4 text-amber-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <Lock className="w-4 h-4 text-[#C9B27C] absolute left-3 top-1/2 -translate-y-1/2" />
                 </div>
-                <div className="text-[10px] text-neutral-400 leading-normal">
+                <div className="text-[10px] text-[#B8B9BC] leading-normal">
                   Superadmin mode grants unrestricted access to all website settings, catalog items, and staff credential management.
                 </div>
               </div>
             ) : (
               <div className="space-y-3">
                 <div className="space-y-1">
-                  <label className="text-neutral-300 font-bold">Staff Email</label>
+                  <label className="text-[#FCFBF8] font-semibold uppercase tracking-[0.12em] text-[11px]">Staff Email</label>
                   <input
                     type="email"
                     required
                     value={adminEmailInput}
                     onChange={(e) => setAdminEmailInput(e.target.value)}
                     placeholder="name@magroup.pk"
-                    className="w-full px-3 py-2.5 rounded-xl bg-neutral-950 border border-neutral-800 text-white focus:outline-none focus:border-amber-500"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0D0E10] border border-[#C9B27C]/25 text-[#FCFBF8] focus:outline-none focus:border-[#C9B27C]"
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-neutral-300 font-bold">Password</label>
+                  <label className="text-[#FCFBF8] font-semibold uppercase tracking-[0.12em] text-[11px]">Password</label>
                   <input
                     type="password"
                     required
                     value={adminPassInput}
                     onChange={(e) => setAdminPassInput(e.target.value)}
                     placeholder="Enter password..."
-                    className="w-full px-3 py-2.5 rounded-xl bg-neutral-950 border border-neutral-800 text-white focus:outline-none focus:border-amber-500"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-[#0D0E10] border border-[#C9B27C]/25 text-[#FCFBF8] focus:outline-none focus:border-[#C9B27C]"
                   />
                 </div>
               </div>
@@ -1324,20 +1371,20 @@ export const AdminDashboard: React.FC = () => {
             <button
               type="submit"
               disabled={loginLoading}
-              className="w-full bg-amber-500 hover:bg-amber-600 text-neutral-950 font-black text-xs py-3.5 rounded-xl flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer disabled:opacity-50"
+              className="w-full bg-[#C9B27C] hover:bg-[#A98B52] text-[#0D0E10] font-bold uppercase tracking-[0.16em] text-xs py-3.5 rounded-xl flex items-center justify-center gap-2 transition-all shadow-md cursor-pointer disabled:opacity-50"
             >
-              {loginLoading ? 'Authenticating...' : 'AUTHENTICATE & ENTER'}
+              {loginLoading ? 'Authenticating...' : 'Authenticate & Enter'}
             </button>
           </form>
 
-          <div className="pt-2 border-t border-neutral-800 text-center">
+          <div className="pt-3 border-t border-[#C9B27C]/15 text-center">
             <button
-              onClick={() => {
-                window.location.hash = '#/';
-              }}
-              className="text-xs text-neutral-500 hover:text-neutral-300"
+              type="button"
+              onClick={() => navigate('home')}
+              className="w-full py-2.5 px-4 rounded-xl bg-[#0D0E10] hover:bg-[#C9B27C] text-[#C9B27C] hover:text-[#0D0E10] border border-[#C9B27C]/35 font-semibold text-xs uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2"
             >
-              &larr; Return to Public Website
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Return to Public Showroom</span>
             </button>
           </div>
         </div>
@@ -1435,39 +1482,39 @@ export const AdminDashboard: React.FC = () => {
   });
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col lg:flex-row">
+    <div className="min-h-screen bg-[#0D0E10] text-[#FCFBF8] flex flex-col lg:flex-row">
       {/* Admin Sidebar */}
-      <aside className="w-full lg:w-64 bg-neutral-900 border-r border-neutral-800 p-5 flex flex-col justify-between shrink-0">
+      <aside className="w-full lg:w-68 bg-[#0D0E10] border-r border-[#C9B27C]/20 p-5 flex flex-col justify-between shrink-0">
         <div className="space-y-6">
           {/* Logo & User */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-neutral-950 border border-amber-500/40 text-amber-400 flex items-center justify-center font-black text-lg">
-              M.A.
+          <div className="flex items-center gap-3 pb-4 border-b border-[#C9B27C]/15">
+            <div className="w-11 h-11 rounded-xl bg-[#151C2C] border border-[#C9B27C]/50 text-[#C9B27C] flex items-center justify-center font-serif font-bold text-lg shadow-md">
+              M.A
             </div>
             <div>
-              <div className="font-extrabold text-white text-xs uppercase tracking-wider flex items-center gap-1.5">
-                <span>Admin Console</span>
+              <div className="font-serif font-bold text-[#FCFBF8] text-sm tracking-wide flex items-center gap-1.5">
+                <span>M.A. Executive</span>
                 {adminRole === 'superadmin' && (
-                  <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-black tracking-normal">
-                    SUPER ADMIN
+                  <span className="font-sans text-[8px] px-1.5 py-0.5 rounded bg-[#C9B27C]/20 text-[#C9B27C] border border-[#C9B27C]/40 font-bold tracking-wider">
+                    MASTER
                   </span>
                 )}
               </div>
-              <div className="text-[11px] text-amber-500 font-semibold truncate max-w-[140px]">{adminUser}</div>
+              <div className="text-[11px] text-[#C9B27C] font-medium truncate max-w-[150px]">{adminUser}</div>
               {adminRole === 'superadmin' && (
-                <div className="text-[9px] text-emerald-400/80 font-medium">Full Master Access Granted</div>
+                <div className="text-[9px] text-[#B8B9BC] font-medium">Supabase Live Sync Active</div>
               )}
             </div>
           </div>
 
           {/* Navigation Links */}
-          <nav className="space-y-1 text-xs font-semibold">
+          <nav className="space-y-1 text-xs font-medium">
             <button
               onClick={() => setActiveTab('overview')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'overview'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <LayoutDashboard className="w-4 h-4" />
@@ -1476,10 +1523,10 @@ export const AdminDashboard: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('products')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'products'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <Package className="w-4 h-4" />
@@ -1488,10 +1535,10 @@ export const AdminDashboard: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('categories')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'categories'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <FolderTree className="w-4 h-4" />
@@ -1499,11 +1546,59 @@ export const AdminDashboard: React.FC = () => {
             </button>
 
             <button
+              onClick={() => setActiveTab('partners')}
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
+                activeTab === 'partners'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
+              }`}
+            >
+              <Award className="w-4 h-4" />
+              <span>Manufacturing Partners ({brands.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('company-profile')}
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
+                activeTab === 'company-profile'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
+              }`}
+            >
+              <Building2 className="w-4 h-4" />
+              <span>Company Profile ({companyPages.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('smart-offers')}
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
+                activeTab === 'smart-offers'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
+              }`}
+            >
+              <Flame className="w-4 h-4" />
+              <span>Smart Offers ({smartOffers.length})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('solutions')}
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
+                activeTab === 'solutions'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
+              }`}
+            >
+              <Cpu className="w-4 h-4" />
+              <span>Build Your Solution ({solutionPackages.length})</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('inventory')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'inventory'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <Layers className="w-4 h-4" />
@@ -1512,10 +1607,10 @@ export const AdminDashboard: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('orders')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'orders'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <ShoppingBag className="w-4 h-4" />
@@ -1524,10 +1619,10 @@ export const AdminDashboard: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('customers')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'customers'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <UserCheck className="w-4 h-4" />
@@ -1536,10 +1631,10 @@ export const AdminDashboard: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('analytics')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'analytics'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <BarChart3 className="w-4 h-4" />
@@ -1548,10 +1643,10 @@ export const AdminDashboard: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('banners')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'banners'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <Sliders className="w-4 h-4" />
@@ -1560,10 +1655,10 @@ export const AdminDashboard: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('coupons')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'coupons'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <Tag className="w-4 h-4" />
@@ -1572,10 +1667,10 @@ export const AdminDashboard: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('inquiries')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'inquiries'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <Users className="w-4 h-4" />
@@ -1583,11 +1678,35 @@ export const AdminDashboard: React.FC = () => {
             </button>
 
             <button
+              onClick={() => setActiveTab('delivery')}
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
+                activeTab === 'delivery'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
+              }`}
+            >
+              <Truck className="w-4 h-4" />
+              <span>Delivery &amp; Zones</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('after-sales')}
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
+                activeTab === 'after-sales'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
+              }`}
+            >
+              <Wrench className="w-4 h-4" />
+              <span>Warranty &amp; Service</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('settings')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'settings'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <Settings className="w-4 h-4" />
@@ -1596,39 +1715,39 @@ export const AdminDashboard: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('security')}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'security'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <div className="flex items-center gap-2.5">
-                <KeyRound className="w-4 h-4 text-amber-400" />
+                <KeyRound className="w-4 h-4 text-[#C9B27C]" />
                 <span>Master Secret &amp; Staff</span>
               </div>
-              <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold">
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#C9B27C]/20 text-[#C9B27C] font-bold">
                 SUPER
               </span>
             </button>
 
             <button
               onClick={() => setActiveTab('ai-assistant')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'ai-assistant'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <Sparkles className="w-4 h-4" />
-              <span>AI Operations Advisor</span>
+              <span>M.A. SMART ASSISTANT</span>
             </button>
 
             <button
               onClick={() => setActiveTab('audit-logs')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl transition-colors cursor-pointer ${
+              className={`w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer ${
                 activeTab === 'audit-logs'
-                  ? 'bg-amber-500 text-neutral-950 font-bold'
-                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+                  ? 'bg-[#C9B27C] text-[#0D0E10] font-bold shadow-sm'
+                  : 'text-[#B8B9BC] hover:bg-[#151C2C] hover:text-[#FCFBF8]'
               }`}
             >
               <ShieldCheck className="w-4 h-4" />
@@ -1638,14 +1757,14 @@ export const AdminDashboard: React.FC = () => {
         </div>
 
         {/* Footer actions */}
-        <div className="pt-6 border-t border-neutral-800 space-y-2 text-xs">
+        <div className="pt-6 border-t border-[#C9B27C]/15 space-y-2.5 text-xs">
           <button
-            onClick={() => {
-              window.location.hash = '#/';
-            }}
-            className="w-full text-left text-neutral-400 hover:text-white py-1.5 px-2 rounded-lg"
+            type="button"
+            onClick={() => navigate('home')}
+            className="w-full flex items-center justify-center gap-2 bg-[#151C2C] hover:bg-[#C9B27C] text-[#C9B27C] hover:text-[#0D0E10] border border-[#C9B27C]/40 font-semibold py-2.5 px-3 rounded-xl transition-all cursor-pointer shadow-xs"
           >
-            &larr; View Public Store
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Return to Public Showroom</span>
           </button>
           <button
             onClick={handleLogout}
@@ -1658,28 +1777,93 @@ export const AdminDashboard: React.FC = () => {
       </aside>
 
       {/* Main Content Viewport */}
-      <main className="flex-1 p-6 sm:p-10 overflow-y-auto">
+      <main className="flex-1 p-6 sm:p-10 overflow-y-auto bg-[#0D0E10]">
         {/* TAB 1: OVERVIEW */}
         {activeTab === 'overview' && (
           <div className="space-y-8">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#C9B27C]/15">
               <div>
-                <h2 className="text-xl sm:text-2xl font-black text-white">Operations &amp; Sales Summary</h2>
-                <p className="text-xs text-neutral-400 mt-1">Live metrics across Pakistan deliveries and warehouse inventory.</p>
+                <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#C9B27C] block mb-1">
+                  Executive Command Center
+                </span>
+                <h2 className="font-serif text-2xl sm:text-3xl font-bold text-[#FCFBF8]">Operations &amp; Sales Summary</h2>
+                <p className="text-xs text-[#B8B9BC] mt-1">Live Supabase metrics across Pakistan deliveries and warehouse inventory.</p>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 rounded-xl bg-neutral-900 border border-neutral-800 text-xs flex items-center gap-2">
-                  <span className="text-neutral-400">Low-Stock Alert:</span>
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Master Storefront Status ON/OFF Quick Toggle */}
+                {adminSettings && (
+                  <div className="p-2 px-3 rounded-xl bg-[#151C2C] border border-[#C9B27C]/30 text-xs flex items-center gap-2.5">
+                    <span className="text-[#B8B9BC] font-medium">Storefront Status:</span>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const currentlyOff =
+                          adminSettings.maintenanceMode === true ||
+                          adminSettings.storefrontEnabled === false;
+                        const nextSettings: StoreSettings = {
+                          ...adminSettings,
+                          maintenanceMode: !currentlyOff,
+                          storefrontEnabled: currentlyOff,
+                        };
+                        setAdminSettings(nextSettings);
+                        try {
+                          if (isFrontendSupabaseConfigured && supabase) {
+                            await saveSettingsInSupabase(nextSettings);
+                          }
+                          await adminFetch('/api/settings', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(nextSettings),
+                          });
+                          await refreshSettings();
+                          showToast(
+                            currentlyOff
+                              ? 'Storefront Status switched ON 🟢 — Live for customers!'
+                              : 'Storefront Status switched OFF 🔴 — Maintenance Mode active.',
+                            currentlyOff ? 'success' : 'info'
+                          );
+                        } catch {
+                          showToast('Failed updating storefront status.', 'error');
+                        }
+                      }}
+                      className={`px-3 py-1 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+                        adminSettings.maintenanceMode === true ||
+                        adminSettings.storefrontEnabled === false
+                          ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                          : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      }`}
+                    >
+                      <span>
+                        {adminSettings.maintenanceMode === true ||
+                        adminSettings.storefrontEnabled === false
+                          ? 'OFF 🔴 (Maintenance)'
+                          : 'ON 🟢 (Live)'}
+                      </span>
+                    </button>
+                  </div>
+                )}
+
+                <div className="p-2.5 rounded-xl bg-[#151C2C] border border-[#C9B27C]/25 text-xs flex items-center gap-2">
+                  <span className="text-[#B8B9BC]">Low-Stock Alert:</span>
                   <input
                     type="number"
                     min="1"
                     max="100"
                     value={lowStockThreshold}
                     onChange={(e) => setLowStockThreshold(Math.max(1, Number(e.target.value)))}
-                    className="w-14 px-2 py-1 rounded-lg bg-neutral-950 border border-neutral-700 text-amber-400 font-bold text-center text-xs"
+                    className="w-14 px-2 py-1 rounded-lg bg-[#0D0E10] border border-[#C9B27C]/30 text-[#C9B27C] font-bold text-center text-xs"
                   />
-                  <span className="text-neutral-500">units</span>
+                  <span className="text-[#B8B9BC]">units</span>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => navigate('home')}
+                  className="px-3.5 py-2.5 rounded-xl bg-[#151C2C] hover:bg-[#C9B27C] text-[#C9B27C] hover:text-[#0D0E10] border border-[#C9B27C]/40 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>Public Showroom</span>
+                </button>
               </div>
             </div>
 
@@ -2135,7 +2319,14 @@ export const AdminDashboard: React.FC = () => {
                           </div>
                         </td>
                         <td className="p-3 font-mono text-neutral-400">{p.sku}</td>
-                        <td className="p-3 text-neutral-300">{p.categoryName || p.categoryId}</td>
+                        <td className="p-3 text-neutral-300">
+                          <div>{p.categoryName || p.categoryId}</div>
+                          {p.subcategoryName && (
+                            <div className="text-[10px] text-amber-400/90 mt-0.5">
+                              ↳ {p.subcategoryName}
+                            </div>
+                          )}
+                        </td>
                         <td className="p-3 text-right font-black text-amber-400">
                           Rs. {p.price.toLocaleString()}
                           {p.salePrice && p.salePrice < p.price && (
@@ -2158,15 +2349,44 @@ export const AdminDashboard: React.FC = () => {
                           </span>
                         </td>
                         <td className="p-3 text-center">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              p.status !== 'inactive'
-                                ? 'bg-emerald-500/10 text-emerald-400'
-                                : 'bg-neutral-800 text-neutral-400'
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const nextStatus = p.status === 'inactive' || p.isActive === false ? 'active' : 'inactive';
+                              const nextActive = nextStatus === 'active';
+                              const updatedProd: Product = {
+                                ...p,
+                                status: nextStatus,
+                                isActive: nextActive,
+                                updatedAt: new Date().toISOString(),
+                              };
+                              try {
+                                if (isFrontendSupabaseConfigured && supabase) {
+                                  await insertOrUpdateProductInSupabase(updatedProd, products);
+                                }
+                                await adminFetch(`/api/products/${p.id}`, {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(updatedProd),
+                                });
+                                await refreshProducts();
+                                showToast(
+                                  `Product "${p.name}" visibility set to ${nextActive ? 'Visible (ON)' : 'Hidden (OFF)'}.`,
+                                  'success'
+                                );
+                              } catch {
+                                showToast('Failed to toggle product visibility.', 'error');
+                              }
+                            }}
+                            className={`px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer transition-colors ${
+                              p.status !== 'inactive' && p.isActive !== false
+                                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25'
+                                : 'bg-neutral-800 text-neutral-400 border border-neutral-700 hover:bg-neutral-700'
                             }`}
+                            title="Click to toggle Product Storefront Visibility ON/OFF"
                           >
-                            {p.status !== 'inactive' ? 'Active' : 'Inactive'}
-                          </span>
+                            {p.status !== 'inactive' && p.isActive !== false ? 'Visible (ON)' : 'Hidden (OFF)'}
+                          </button>
                         </td>
                         <td className="p-3 text-center space-x-1">
                           <button
@@ -2267,13 +2487,38 @@ export const AdminDashboard: React.FC = () => {
                         <h3 className="font-bold text-sm text-white truncate">{cat.name}</h3>
                         <div className="text-[11px] text-neutral-400 font-mono truncate">/{cat.slug}</div>
                         <div className="flex items-center gap-2 mt-1">
-                          <span
-                            className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
-                              cat.isActive !== false ? 'bg-emerald-500/10 text-emerald-400' : 'bg-neutral-800 text-neutral-400'
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const nextActive = cat.isActive === false ? true : false;
+                              const updatedCat: Category = { ...cat, isActive: nextActive };
+                              try {
+                                if (isFrontendSupabaseConfigured && supabase) {
+                                  await insertOrUpdateCategoryInSupabase(updatedCat, categories);
+                                }
+                                await adminFetch(`/api/categories/${cat.id}`, {
+                                  method: 'PUT',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(updatedCat),
+                                });
+                                await refreshCategories();
+                                showToast(
+                                  `Category "${cat.name}" is now ${nextActive ? 'Visible (ON)' : 'Hidden (OFF)'}.`,
+                                  'success'
+                                );
+                              } catch {
+                                showToast('Failed to toggle category visibility', 'error');
+                              }
+                            }}
+                            className={`px-2 py-0.5 rounded text-[9px] font-bold cursor-pointer transition-colors ${
+                              cat.isActive !== false
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : 'bg-neutral-800 text-neutral-400 border border-neutral-700'
                             }`}
+                            title="Click to toggle Category Visibility ON/OFF"
                           >
-                            {cat.isActive !== false ? 'ACTIVE' : 'INACTIVE'}
-                          </span>
+                            {cat.isActive !== false ? 'VISIBLE (ON)' : 'HIDDEN (OFF)'}
+                          </button>
                           <span className="text-[10px] text-neutral-500">Order: {cat.displayOrder || 0}</span>
                         </div>
                       </div>
@@ -2285,7 +2530,7 @@ export const AdminDashboard: React.FC = () => {
                           setIsCategoryModalOpen(true);
                         }}
                         className="p-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-amber-400 cursor-pointer"
-                        title="Edit Category"
+                        title="Edit Category & Subcategories"
                       >
                         <Edit className="w-3.5 h-3.5" />
                       </button>
@@ -2299,19 +2544,69 @@ export const AdminDashboard: React.FC = () => {
                     </div>
                   </div>
                   <p className="text-xs text-neutral-400 line-clamp-2">{cat.description || 'No description provided.'}</p>
-                  <div className="pt-2 border-t border-neutral-800">
-                    <span className="text-[10px] text-neutral-500 uppercase font-semibold">
-                      Subcategories ({cat.subcategories?.length || 0}):
-                    </span>
-                    <div className="flex flex-wrap gap-1 mt-1">
+                  <div className="pt-2 border-t border-neutral-800 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-neutral-400 uppercase font-semibold">
+                        Hierarchy — Subcategories ({cat.subcategories?.length || 0})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingCategory(cat);
+                          setIsCategoryModalOpen(true);
+                        }}
+                        className="text-[10px] text-amber-400 hover:underline cursor-pointer"
+                      >
+                        + Manage Subcategories
+                      </button>
+                    </div>
+                    <div className="space-y-1 mt-1">
                       {cat.subcategories && cat.subcategories.length > 0 ? (
                         cat.subcategories.map((s) => (
-                          <span key={s.id} className="text-[10px] bg-neutral-800 text-neutral-300 px-2 py-0.5 rounded">
-                            {s.name}
-                          </span>
+                          <div
+                            key={s.id}
+                            className="flex items-center justify-between text-[11px] bg-neutral-950/80 border border-neutral-800/80 px-2.5 py-1.5 rounded-lg"
+                          >
+                            <span className="text-neutral-200 truncate">
+                              <span className="text-amber-400 mr-1">↳</span>
+                              {s.name}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const updatedSubs = (cat.subcategories || []).map((subItem) =>
+                                  subItem.id === s.id
+                                    ? { ...subItem, isActive: subItem.isActive === false ? true : false }
+                                    : subItem
+                                );
+                                const updatedCat: Category = { ...cat, subcategories: updatedSubs };
+                                try {
+                                  if (isFrontendSupabaseConfigured && supabase) {
+                                    await insertOrUpdateCategoryInSupabase(updatedCat, categories);
+                                  }
+                                  await adminFetch(`/api/categories/${cat.id}`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(updatedCat),
+                                  });
+                                  await refreshCategories();
+                                  showToast(`Subcategory "${s.name}" visibility updated.`, 'success');
+                                } catch {
+                                  showToast('Failed to update subcategory visibility', 'error');
+                                }
+                              }}
+                              className={`px-1.5 py-0.5 rounded text-[9px] font-bold cursor-pointer ${
+                                s.isActive !== false
+                                  ? 'bg-emerald-500/15 text-emerald-400'
+                                  : 'bg-neutral-800 text-neutral-500'
+                              }`}
+                            >
+                              {s.isActive !== false ? 'Visible' : 'Hidden'}
+                            </button>
+                          </div>
                         ))
                       ) : (
-                        <span className="text-[10px] text-neutral-600 italic">None</span>
+                        <span className="text-[10px] text-neutral-600 italic block">No subcategories created yet</span>
                       )}
                     </div>
                   </div>
@@ -2966,58 +3261,136 @@ export const AdminDashboard: React.FC = () => {
         )}
 
         {/* TAB 6: AI OPERATIONS ASSISTANT */}
-        {activeTab === 'ai-assistant' && (
-          <div className="space-y-6 max-w-3xl">
-            <div>
-              <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2">
-                <Sparkles className="w-6 h-6 text-amber-500" />
-                <span>AI Operations &amp; Copywriter</span>
-              </h2>
-              <p className="text-xs text-neutral-400 mt-1">
-                Generate technical product descriptions, SEO meta descriptions, or analyze stock trends.
-              </p>
-            </div>
+        {/* TAB: CERTIFIED MANUFACTURING PARTNERS */}
+        {activeTab === 'partners' && (
+          <PartnersTab
+            partners={brands}
+            categories={categories}
+            adminToken={adminToken || localStorage.getItem('ma_admin_token') || ''}
+            onRefresh={refreshPartners}
+            showToast={showToast}
+          />
+        )}
 
-            <div className="bg-neutral-900 p-6 rounded-2xl border border-neutral-800 space-y-4 text-xs">
-              <div className="space-y-1">
-                <label className="font-bold text-neutral-300 uppercase">Insight Task Type</label>
-                <select
-                  value={aiType}
-                  onChange={(e) => setAiType(e.target.value as any)}
-                  className="w-full px-3 py-2.5 rounded-xl bg-neutral-950 border border-neutral-800 text-white focus:outline-none focus:border-amber-500"
-                >
-                  <option value="product_description">Generate Technical Product Description</option>
-                  <option value="seo_meta">Generate SEO Title &amp; Meta Description</option>
-                  <option value="inventory_insight">Inventory Restock &amp; Pricing Recommendation</option>
-                </select>
+        {/* TAB: PREMIUM COMPANY PROFILE SYSTEM */}
+        {activeTab === 'company-profile' && (
+          <CompanyProfileTab
+            companyPages={companyPages}
+            settings={adminSettings || settings}
+            onRefreshPages={refreshCompanyPages}
+            onRefreshSettings={refreshSettings}
+            showToast={showToast}
+          />
+        )}
+
+        {/* TAB: SMART OFFERS & PROMOTIONS */}
+        {activeTab === 'smart-offers' && (
+          <SmartOffersTab
+            smartOffers={smartOffers}
+            coupons={storeCoupons.length > 0 ? storeCoupons : coupons}
+            products={products}
+            categories={categories}
+            onRefreshOffers={refreshSmartOffers}
+            onRefreshCoupons={async () => {
+              await refreshCoupons();
+              await loadAdminData();
+            }}
+            showToast={showToast}
+          />
+        )}
+
+        {/* TAB: BUILD YOUR SOLUTION & QUOTATION ENGINE */}
+        {activeTab === 'solutions' && (
+          <SolutionsTab
+            solutionPackages={solutionPackages}
+            products={products}
+            categories={categories}
+            onRefreshSolutions={refreshSolutions}
+            showToast={showToast}
+          />
+        )}
+
+        {/* TAB: DELIVERY, AREAS & ZONES MANAGEMENT */}
+        {activeTab === 'delivery' && (
+          <DeliveryManagementTab
+            products={products}
+            onRefreshProducts={refreshProducts}
+            showToast={showToast}
+          />
+        )}
+
+        {/* TAB: WARRANTY, INSTALLATION & SUPPORT CENTER */}
+        {activeTab === 'after-sales' && (
+          <AfterSalesServiceTab showToast={showToast} />
+        )}
+
+        {/* TAB: M.A. SMART ASSISTANT MANAGEMENT & AI COPYWRITER */}
+        {activeTab === 'ai-assistant' && (adminSettings || settings) && (
+          <div className="space-y-10">
+            <AiAssistantTab
+              settings={(adminSettings || settings)!}
+              onUpdateSettings={async (updated) => {
+                setAdminSettings(updated);
+                await refreshSettings();
+              }}
+              products={products}
+              categories={categories}
+              partners={brands}
+              notify={(msg, type) => showToast(msg, type || 'success')}
+            />
+
+            <div className="space-y-6 max-w-4xl pt-6 border-t border-neutral-800">
+              <div>
+                <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2">
+                  <Sparkles className="w-6 h-6 text-[#C9B27C]" />
+                  <span>AI Catalog Copywriter &amp; Inventory Insights</span>
+                </h2>
+                <p className="text-xs text-neutral-400 mt-1">
+                  Generate technical product descriptions, SEO meta descriptions, or analyze stock trends.
+                </p>
               </div>
 
-              <div className="space-y-1">
-                <label className="font-bold text-neutral-300 uppercase">Equipment Name or Prompt</label>
-                <textarea
-                  rows={3}
-                  value={aiPrompt}
-                  onChange={(e) => setAiPrompt(e.target.value)}
-                  placeholder="e.g. 10kW On-Grid Solar Inverter with 3-Phase IP65 WAPDA Net Metering compliance..."
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-800 text-white focus:outline-none focus:border-amber-500"
-                />
-              </div>
-
-              <button
-                onClick={handleGenerateAi}
-                disabled={aiLoading || !aiPrompt}
-                className="bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold px-6 py-2.5 rounded-xl flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
-              >
-                {aiLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                <span>{aiLoading ? 'Generating with Gemini...' : 'Generate with Gemini'}</span>
-              </button>
-
-              {aiResult && (
-                <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-2">
-                  <div className="font-bold text-amber-400 uppercase text-[11px]">Generated Result:</div>
-                  <div className="text-neutral-200 whitespace-pre-wrap leading-relaxed">{aiResult}</div>
+              <div className="bg-neutral-900 p-6 rounded-2xl border border-neutral-800 space-y-4 text-xs">
+                <div className="space-y-1">
+                  <label className="font-bold text-neutral-300 uppercase">Insight Task Type</label>
+                  <select
+                    value={aiType}
+                    onChange={(e) => setAiType(e.target.value as any)}
+                    className="w-full px-3 py-2.5 rounded-xl bg-neutral-950 border border-neutral-800 text-white focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="product_description">Generate Technical Product Description</option>
+                    <option value="seo_meta">Generate SEO Title &amp; Meta Description</option>
+                    <option value="inventory_insight">Inventory Restock &amp; Pricing Recommendation</option>
+                  </select>
                 </div>
-              )}
+
+                <div className="space-y-1">
+                  <label className="font-bold text-neutral-300 uppercase">Equipment Name or Prompt</label>
+                  <textarea
+                    rows={3}
+                    value={aiPrompt}
+                    onChange={(e) => setAiPrompt(e.target.value)}
+                    placeholder="e.g. 10kW On-Grid Solar Inverter with 3-Phase IP65 WAPDA Net Metering compliance..."
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-950 border border-neutral-800 text-white focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+
+                <button
+                  onClick={handleGenerateAi}
+                  disabled={aiLoading || !aiPrompt}
+                  className="bg-[#C9B27C] hover:bg-[#A98B52] text-[#0D0E10] font-bold px-6 py-2.5 rounded-xl flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {aiLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                  <span>{aiLoading ? 'Generating with M.A. SMART ASSISTANT...' : 'Generate Copy & Insights'}</span>
+                </button>
+
+                {aiResult && (
+                  <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-2">
+                    <div className="font-bold text-[#C9B27C] uppercase text-[11px]">Generated Result:</div>
+                    <div className="text-neutral-200 whitespace-pre-wrap leading-relaxed">{aiResult}</div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -3063,8 +3436,86 @@ export const AdminDashboard: React.FC = () => {
             <div>
               <h2 className="text-xl sm:text-2xl font-black text-white">Full Website Control &amp; Store Settings</h2>
               <p className="text-xs text-neutral-400 mt-1">
-                Control all website text, helpline visibility, showroom locations, shipping rates, and Cash on Delivery rules in real time.
+                Control master storefront status (ON/OFF), website text, helpline visibility, showroom locations, shipping rates, and Cash on Delivery rules in real time.
               </p>
+            </div>
+
+            {/* Section 0: MASTER STOREFRONT STATUS (ON 🟢 / OFF 🔴) */}
+            <div className="bg-neutral-900 p-6 rounded-2xl border border-[#C9B27C]/40 space-y-4 text-xs shadow-lg">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#C9B27C]">
+                    Master Storefront Switch (Supabase Synced)
+                  </span>
+                  <h3 className="text-base font-bold text-white mt-0.5">
+                    Storefront Status:{' '}
+                    {adminSettings.maintenanceMode === true ||
+                    adminSettings.storefrontEnabled === false ? (
+                      <span className="text-rose-400">OFF 🔴 (Maintenance Mode)</span>
+                    ) : (
+                      <span className="text-emerald-400">ON 🟢 (Public Storefront Live)</span>
+                    )}
+                  </h3>
+                  <p className="text-[11px] text-neutral-400 mt-1">
+                    When switched OFF, customers see the full-screen maintenance message (&ldquo;We&apos;re Currently Working on Our Store&rdquo;) and cannot add items to cart or place orders. Admin Panel remains accessible.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAdminSettings({
+                        ...adminSettings,
+                        maintenanceMode: false,
+                        storefrontEnabled: true,
+                      })
+                    }
+                    className={`px-4 py-2.5 rounded-xl font-bold text-xs cursor-pointer transition-all ${
+                      !adminSettings.maintenanceMode && adminSettings.storefrontEnabled !== false
+                        ? 'bg-emerald-500 text-neutral-950 shadow-md'
+                        : 'bg-neutral-950 text-neutral-400 border border-neutral-800 hover:text-white'
+                    }`}
+                  >
+                    ON 🟢
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAdminSettings({
+                        ...adminSettings,
+                        maintenanceMode: true,
+                        storefrontEnabled: false,
+                      })
+                    }
+                    className={`px-4 py-2.5 rounded-xl font-bold text-xs cursor-pointer transition-all ${
+                      adminSettings.maintenanceMode === true ||
+                      adminSettings.storefrontEnabled === false
+                        ? 'bg-rose-500 text-white shadow-md'
+                        : 'bg-neutral-950 text-neutral-400 border border-neutral-800 hover:text-white'
+                    }`}
+                  >
+                    OFF 🔴
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1 pt-2 border-t border-neutral-800">
+                <label className="font-bold text-neutral-300">
+                  Maintenance Screen Custom Message
+                </label>
+                <input
+                  type="text"
+                  value={
+                    adminSettings.maintenanceMessage ||
+                    "We're currently performing maintenance and improvements. Please check back shortly."
+                  }
+                  onChange={(e) =>
+                    setAdminSettings({ ...adminSettings, maintenanceMessage: e.target.value })
+                  }
+                  className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-white"
+                />
+              </div>
             </div>
 
             {/* Section 1: Store Branding & Top Announcement Bar */}
@@ -3514,6 +3965,9 @@ export const AdminDashboard: React.FC = () => {
               <button
                 onClick={async () => {
                   try {
+                    if (isFrontendSupabaseConfigured && supabase) {
+                      await saveSettingsInSupabase(adminSettings);
+                    }
                     const res = await adminFetch('/api/settings', {
                       method: 'PUT',
                       headers: { 'Content-Type': 'application/json' },
@@ -3525,7 +3979,7 @@ export const AdminDashboard: React.FC = () => {
                       return;
                     }
                     await refreshSettings();
-                    showToast('All website settings and receipt logo saved and published live!', 'success');
+                    showToast('All website settings and Storefront Status saved to Supabase!', 'success');
                   } catch (err: any) {
                     showToast(err?.message || 'Error saving settings', 'error');
                   }
@@ -3614,9 +4068,9 @@ export const AdminDashboard: React.FC = () => {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="space-y-1">
-                  <label className="font-bold text-neutral-300">SKU</label>
+                  <label className="font-bold text-neutral-300">SKU *</label>
                   <input
                     type="text"
                     required
@@ -3626,27 +4080,73 @@ export const AdminDashboard: React.FC = () => {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="font-bold text-neutral-300">Category</label>
+                  <label className="font-bold text-neutral-300">Brand *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingProduct.brand || ''}
+                    onChange={(e) => setEditingProduct({ ...editingProduct, brand: e.target.value })}
+                    placeholder="e.g. Inverex / Longi / Boss"
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-white"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-bold text-neutral-300">Category *</label>
                   <select
                     value={editingProduct.categoryId}
                     onChange={(e) => {
                       const sel = categories.find((c) => c.id === e.target.value);
+                      const firstSub = sel?.subcategories?.[0];
                       setEditingProduct({
                         ...editingProduct,
                         categoryId: e.target.value,
                         categoryName: sel?.name || '',
+                        subcategoryId: firstSub?.id || '',
+                        subcategoryName: firstSub?.name || '',
                       });
                     }}
                     className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-white"
                   >
                     {categories.map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.name}
+                        {c.name} {c.isActive === false ? '(Hidden)' : ''}
                       </option>
                     ))}
                   </select>
                 </div>
               </div>
+
+              {/* Dynamic Subcategory Dropdown belonging strictly to selected Category */}
+              {(() => {
+                const selectedCatObj = categories.find((c) => c.id === editingProduct.categoryId);
+                const availableSubs = selectedCatObj?.subcategories || [];
+                return (
+                  <div className="space-y-1">
+                    <label className="font-bold text-neutral-300">
+                      Subcategory ({selectedCatObj?.name || 'Selected Category'})
+                    </label>
+                    <select
+                      value={editingProduct.subcategoryId || ''}
+                      onChange={(e) => {
+                        const subObj = availableSubs.find((s) => s.id === e.target.value);
+                        setEditingProduct({
+                          ...editingProduct,
+                          subcategoryId: subObj?.id || '',
+                          subcategoryName: subObj?.name || '',
+                        });
+                      }}
+                      className="w-full px-3 py-2 rounded-xl bg-neutral-950 border border-neutral-800 text-white"
+                    >
+                      <option value="">-- General / All {selectedCatObj?.name || 'Category'} --</option>
+                      {availableSubs.map((sub) => (
+                        <option key={sub.id} value={sub.id}>
+                          {sub.name} {sub.isActive === false ? '(Hidden)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })()}
 
               <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1">
@@ -3870,29 +4370,32 @@ export const AdminDashboard: React.FC = () => {
                 />
               </div>
 
-              {/* Availability Status & Featured Status Toggles */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-2xl bg-neutral-950 border border-neutral-800">
+              {/* Availability Status & Featured / Best Seller / New Arrival Toggles */}
+              <div className="space-y-3 p-4 rounded-2xl bg-neutral-950 border border-neutral-800">
                 <div className="space-y-1">
-                  <label className="font-bold text-neutral-300 block">Storefront Availability</label>
+                  <label className="font-bold text-neutral-300 block">
+                    Product Visibility (ON/OFF)
+                  </label>
                   <select
                     value={editingProduct.status || 'active'}
                     onChange={(e) =>
                       setEditingProduct({
                         ...editingProduct,
                         status: e.target.value as Product['status'],
+                        isActive: e.target.value === 'active',
                       })
                     }
                     className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-white cursor-pointer"
                   >
-                    <option value="active">Active (Visible on Storefront)</option>
-                    <option value="inactive">Inactive (Hidden from Storefront)</option>
+                    <option value="active">ON — Visible on Storefront</option>
+                    <option value="inactive">OFF — Hidden from Storefront (Remains in Admin &amp; Supabase)</option>
                     <option value="archived">Archived</option>
                   </select>
                 </div>
 
-                <div className="space-y-1 flex flex-col justify-end">
-                  <label className="flex items-center justify-between px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 cursor-pointer">
-                    <span className="font-bold text-neutral-200">Featured Product</span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                  <label className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 cursor-pointer">
+                    <span className="font-bold text-neutral-200">Featured ON/OFF</span>
                     <input
                       type="checkbox"
                       checked={Boolean(editingProduct.isFeatured)}
@@ -3900,6 +4403,36 @@ export const AdminDashboard: React.FC = () => {
                         setEditingProduct({
                           ...editingProduct,
                           isFeatured: e.target.checked,
+                        })
+                      }
+                      className="rounded border-neutral-700 text-amber-500 focus:ring-0 w-4 h-4 cursor-pointer"
+                    />
+                  </label>
+
+                  <label className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 cursor-pointer">
+                    <span className="font-bold text-neutral-200">Best Seller ON/OFF</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(editingProduct.isBestSeller)}
+                      onChange={(e) =>
+                        setEditingProduct({
+                          ...editingProduct,
+                          isBestSeller: e.target.checked,
+                        })
+                      }
+                      className="rounded border-neutral-700 text-amber-500 focus:ring-0 w-4 h-4 cursor-pointer"
+                    />
+                  </label>
+
+                  <label className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-neutral-900 border border-neutral-800 cursor-pointer">
+                    <span className="font-bold text-neutral-200">New Arrival ON/OFF</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(editingProduct.isNewArrival)}
+                      onChange={(e) =>
+                        setEditingProduct({
+                          ...editingProduct,
+                          isNewArrival: e.target.checked,
                         })
                       }
                       className="rounded border-neutral-700 text-amber-500 focus:ring-0 w-4 h-4 cursor-pointer"
@@ -4073,30 +4606,120 @@ export const AdminDashboard: React.FC = () => {
                 )}
               </div>
 
-              {/* Subcategories */}
-              <div className="space-y-2 p-4 rounded-2xl bg-neutral-950 border border-neutral-800">
-                <label className="font-bold text-neutral-200 text-xs">Subcategories (Optional)</label>
-                <div className="flex flex-wrap gap-1.5 min-h-6">
-                  {(editingCategory.subcategories || []).map((sub) => (
-                    <span
+              {/* Subcategories Management with Visibility ON/OFF, Display Order & Description */}
+              <div className="space-y-3 p-4 rounded-2xl bg-neutral-950 border border-neutral-800">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-neutral-200 text-xs">
+                    Subcategories Hierarchy (Category ↳ Subcategory)
+                  </label>
+                  <span className="text-[10px] text-neutral-400">
+                    {(editingCategory.subcategories || []).length} subcategories
+                  </span>
+                </div>
+
+                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                  {(editingCategory.subcategories || []).map((sub, sIdx) => (
+                    <div
                       key={sub.id}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-200 text-[11px]"
+                      className="p-2.5 rounded-xl bg-neutral-900 border border-neutral-800 space-y-2"
                     >
-                      <span>{sub.name}</span>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveSubcategory(sub.id)}
-                        className="text-neutral-400 hover:text-rose-400 cursor-pointer text-xs"
-                      >
-                        ✕
-                      </button>
-                    </span>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 flex-1">
+                          <span className="text-amber-400 font-bold">↳</span>
+                          <input
+                            type="text"
+                            value={sub.name}
+                            onChange={(e) => {
+                              const nextSubs = [...(editingCategory.subcategories || [])];
+                              nextSubs[sIdx] = {
+                                ...sub,
+                                name: e.target.value,
+                                slug: e.target.value
+                                  .toLowerCase()
+                                  .replace(/[^a-z0-9]+/g, '-')
+                                  .replace(/(^-|-$)/g, ''),
+                              };
+                              setEditingCategory({ ...editingCategory, subcategories: nextSubs });
+                            }}
+                            className="flex-1 px-2.5 py-1 rounded-lg bg-neutral-950 border border-neutral-800 text-white text-xs font-semibold"
+                          />
+                        </div>
+
+                        <input
+                          type="number"
+                          title="Display Order"
+                          value={sub.displayOrder ?? sIdx + 1}
+                          onChange={(e) => {
+                            const nextSubs = [...(editingCategory.subcategories || [])];
+                            nextSubs[sIdx] = { ...sub, displayOrder: Number(e.target.value) };
+                            setEditingCategory({ ...editingCategory, subcategories: nextSubs });
+                          }}
+                          className="w-14 px-2 py-1 rounded-lg bg-neutral-950 border border-neutral-800 text-neutral-300 text-[11px] text-center"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextSubs = [...(editingCategory.subcategories || [])];
+                            nextSubs[sIdx] = {
+                              ...sub,
+                              isActive: sub.isActive === false ? true : false,
+                            };
+                            setEditingCategory({ ...editingCategory, subcategories: nextSubs });
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer ${
+                            sub.isActive !== false
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              : 'bg-neutral-800 text-neutral-400 border border-neutral-700'
+                          }`}
+                        >
+                          {sub.isActive !== false ? 'Visible' : 'Hidden'}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSubcategory(sub.id)}
+                          className="p-1 text-neutral-400 hover:text-rose-400 cursor-pointer"
+                          title="Delete Subcategory"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pl-4">
+                        <input
+                          type="text"
+                          value={sub.description || ''}
+                          onChange={(e) => {
+                            const nextSubs = [...(editingCategory.subcategories || [])];
+                            nextSubs[sIdx] = { ...sub, description: e.target.value };
+                            setEditingCategory({ ...editingCategory, subcategories: nextSubs });
+                          }}
+                          placeholder="Subcategory description (optional)"
+                          className="px-2.5 py-1 rounded-lg bg-neutral-950 border border-neutral-800 text-neutral-300 text-[11px]"
+                        />
+                        <input
+                          type="text"
+                          value={sub.image || ''}
+                          onChange={(e) => {
+                            const nextSubs = [...(editingCategory.subcategories || [])];
+                            nextSubs[sIdx] = { ...sub, image: e.target.value };
+                            setEditingCategory({ ...editingCategory, subcategories: nextSubs });
+                          }}
+                          placeholder="Subcategory image URL (optional)"
+                          className="px-2.5 py-1 rounded-lg bg-neutral-950 border border-neutral-800 text-neutral-300 text-[11px] font-mono"
+                        />
+                      </div>
+                    </div>
                   ))}
                   {(!editingCategory.subcategories || editingCategory.subcategories.length === 0) && (
-                    <span className="text-neutral-500 italic text-[11px]">No subcategories added yet.</span>
+                    <span className="text-neutral-500 italic text-[11px] block">
+                      No subcategories added yet. Add subcategories below.
+                    </span>
                   )}
                 </div>
-                <div className="flex items-center gap-2 pt-1">
+
+                <div className="flex items-center gap-2 pt-2 border-t border-neutral-800">
                   <input
                     type="text"
                     value={newSubcategoryName}
@@ -4107,15 +4730,15 @@ export const AdminDashboard: React.FC = () => {
                         handleAddSubcategory();
                       }
                     }}
-                    placeholder="Enter subcategory name..."
-                    className="flex-1 px-3 py-1.5 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs"
+                    placeholder="New subcategory name (e.g. Solar Inverters, LED Lights)..."
+                    className="flex-1 px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-800 text-white text-xs"
                   />
                   <button
                     type="button"
                     onClick={handleAddSubcategory}
-                    className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-amber-400 font-bold cursor-pointer text-xs"
+                    className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-neutral-950 font-bold cursor-pointer text-xs"
                   >
-                    + Add
+                    + Add Subcategory
                   </button>
                 </div>
               </div>
@@ -4600,19 +5223,172 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               <div className="space-y-1.5">
-                <div className="text-amber-400 font-bold uppercase text-[10px] tracking-wider">Delivery Destination</div>
+                <div className="text-amber-400 font-bold uppercase text-[10px] tracking-wider">Delivery Destination &amp; Zone Snapshot</div>
                 <div className="text-neutral-200">{selectedOrder.customer.addressLine}</div>
                 <div className="text-neutral-400">
+                  {selectedOrder.deliverySnapshot?.areaName || selectedOrder.customer.areaName || selectedOrder.customer.city},{' '}
                   {selectedOrder.customer.city}, {selectedOrder.customer.province}
                 </div>
+                {selectedOrder.deliverySnapshot && (
+                  <div className="text-[11px] text-[#C9B27C] font-mono">
+                    Zone: {selectedOrder.deliverySnapshot.zoneName} · Rule: {selectedOrder.deliverySnapshot.ruleApplied}
+                  </div>
+                )}
+                {selectedOrder.deliverySnapshot?.estimatedDeliveryText && (
+                  <div className="text-[11px] text-emerald-400">
+                    Est. Delivery: {selectedOrder.deliverySnapshot.estimatedDeliveryText}
+                  </div>
+                )}
                 <div className="text-[11px] text-amber-500/90 font-medium">
                   Payment Method: {selectedOrder.paymentMethod || 'Cash on Delivery (COD)'}
                 </div>
                 {selectedOrder.customerNotes && (
                   <div className="text-[11px] text-neutral-400 italic pt-1">
-                    Note: "{selectedOrder.customerNotes}"
+                    Customer Instructions: "{selectedOrder.customerNotes}"
                   </div>
                 )}
+              </div>
+            </div>
+
+            {/* Delivery Status, COD Verification & Manual Delivery Charge Override */}
+            <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] text-neutral-400 uppercase font-bold">
+                    Shipment Delivery Status (Separate from Order Status)
+                  </label>
+                  <select
+                    value={selectedOrder.deliveryStatus || 'Pending'}
+                    onChange={(e) => {
+                      const nextDelStatus = e.target.value as any;
+                      handleUpdateOrderStatus(
+                        selectedOrder.id,
+                        selectedOrder.status,
+                        selectedOrder.paymentStatus,
+                        selectedOrder.trackingNumber,
+                        selectedOrder.courierName,
+                        { deliveryStatus: nextDelStatus } as any
+                      );
+                      setSelectedOrder({ ...selectedOrder, deliveryStatus: nextDelStatus });
+                    }}
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 text-white font-semibold text-xs"
+                  >
+                    <option value="Pending">Pending</option>
+                    <option value="Processing">Processing</option>
+                    <option value="Dispatched">Dispatched</option>
+                    <option value="In Transit">In Transit</option>
+                    <option value="Out for Delivery">Out for Delivery</option>
+                    <option value="Delivered">Delivered</option>
+                    <option value="Delivery Attempted">Delivery Attempted</option>
+                    <option value="Failed Delivery">Failed Delivery</option>
+                    <option value="Returned">Returned</option>
+                    <option value="Cancelled">Cancelled</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] text-neutral-400 uppercase font-bold">
+                    COD Order Verification Status
+                  </label>
+                  <select
+                    value={selectedOrder.codVerificationStatus || 'Pending Verification'}
+                    onChange={(e) => {
+                      const nextVer = e.target.value as any;
+                      handleUpdateOrderStatus(
+                        selectedOrder.id,
+                        selectedOrder.status,
+                        selectedOrder.paymentStatus,
+                        selectedOrder.trackingNumber,
+                        selectedOrder.courierName,
+                        {
+                          codVerificationStatus: nextVer,
+                          codVerified: nextVer === 'Verified',
+                        } as any
+                      );
+                      setSelectedOrder({
+                        ...selectedOrder,
+                        codVerificationStatus: nextVer,
+                        codVerified: nextVer === 'Verified',
+                      });
+                    }}
+                    className="w-full px-3 py-2 rounded-xl bg-neutral-900 border border-neutral-700 text-white font-semibold text-xs"
+                  >
+                    <option value="Pending Verification">Pending Verification</option>
+                    <option value="Verified">Verified via Phone / WhatsApp</option>
+                    <option value="Flagged">Flagged for Review</option>
+                    <option value="Rejected">Rejected</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Manual Delivery Charge Override */}
+              <div className="pt-2 border-t border-neutral-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase text-amber-400">
+                    Manual Delivery Charge Override (Calculated: Rs. {selectedOrder.shippingFee.toLocaleString()})
+                  </span>
+                  {selectedOrder.deliveryOverride && (
+                    <span className="text-[10px] text-emerald-400 font-mono">
+                      Overridden from Rs. {selectedOrder.deliveryOverride.previousCharge} by{' '}
+                      {selectedOrder.deliveryOverride.overriddenBy} ({selectedOrder.deliveryOverride.reason})
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="number"
+                    value={overrideAmountInput}
+                    onChange={(e) => setOverrideAmountInput(e.target.value)}
+                    placeholder="New Delivery Amount (PKR)"
+                    className="sm:w-44 px-3 py-1.5 rounded-lg bg-neutral-900 border border-neutral-700 text-white font-mono"
+                  />
+                  <input
+                    type="text"
+                    value={overrideReasonInput}
+                    onChange={(e) => setOverrideReasonInput(e.target.value)}
+                    placeholder="Reason for override (e.g. Loyal client / Consolidated shipment)"
+                    className="flex-1 px-3 py-1.5 rounded-lg bg-neutral-900 border border-neutral-700 text-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (overrideAmountInput === '' || !overrideReasonInput.trim()) {
+                        showToast('Enter both override amount and reason.', 'error');
+                        return;
+                      }
+                      const amt = Math.max(0, Number(overrideAmountInput) || 0);
+                      handleUpdateOrderStatus(
+                        selectedOrder.id,
+                        selectedOrder.status,
+                        selectedOrder.paymentStatus,
+                        selectedOrder.trackingNumber,
+                        selectedOrder.courierName,
+                        {
+                          deliveryOverride: {
+                            overrideCharge: amt,
+                            reason: overrideReasonInput.trim(),
+                          },
+                        } as any
+                      );
+                      setSelectedOrder({
+                        ...selectedOrder,
+                        shippingFee: amt,
+                        grandTotal: Math.max(
+                          0,
+                          selectedOrder.subtotal -
+                            (selectedOrder.discount || 0) +
+                            amt +
+                            (selectedOrder.installationFee || 0)
+                        ),
+                      });
+                      setOverrideAmountInput('');
+                      setOverrideReasonInput('');
+                    }}
+                    className="px-3.5 py-1.5 rounded-lg bg-[#C9B27C] text-[#0D0E10] font-bold cursor-pointer shrink-0"
+                  >
+                    Apply Override
+                  </button>
+                </div>
               </div>
             </div>
 

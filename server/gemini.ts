@@ -23,14 +23,18 @@ if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
 async function getHydratedCatalog() {
   if (supabaseService.isConfigured()) {
     try {
-      const [supaProducts, supaCats, supaOrders] = await Promise.all([
+      const [supaProducts, supaCats, supaOrders, supaPartners, supaSettings] = await Promise.all([
         supabaseService.getProducts(),
         supabaseService.getCategories(),
         supabaseService.getOrders(),
+        supabaseService.getPartners(),
+        supabaseService.getSettings(),
       ]);
       if (supaProducts !== null) db.syncProducts(supaProducts);
       if (supaCats !== null) db.syncCategories(supaCats);
       if (supaOrders !== null) db.syncOrders(supaOrders);
+      if (supaPartners !== null && supaPartners.length > 0) db.syncBrands(supaPartners);
+      if (supaSettings !== null) db.updateSettings(supaSettings);
     } catch {
       // Fallback to local hydrated db
     }
@@ -38,6 +42,7 @@ async function getHydratedCatalog() {
   return {
     products: db.getProducts(),
     categories: db.getCategories(),
+    partners: db.getBrands(),
     orders: db.getOrders(),
     settings: db.getSettings(),
   };
@@ -45,42 +50,135 @@ async function getHydratedCatalog() {
 
 export async function askShoppingAssistant(
   userQuery: string,
-  chatHistory: { role: 'user' | 'model'; text: string }[] = []
+  chatHistory: { role: 'user' | 'model'; text: string }[] = [],
+  customerAccount?: { id?: string; email?: string; phone?: string; fullName?: string } | null
 ): Promise<{ reply: string; recommendedProductIds: string[] }> {
-  const { products, settings } = await getHydratedCatalog();
-  const activeProducts = products.filter(
-    (p) => p.status !== 'archived' && p.status !== 'inactive' && !p.isArchived
-  );
+  const { products, categories, partners, orders, settings } = await getHydratedCatalog();
+
+  if (settings.aiAssistantEnabled === false) {
+    return {
+      reply:
+        'M.A. SMART ASSISTANT is currently offline for scheduled updates. Please browse our catalog directly or contact M.A. GROUP OF COMPANIES support.',
+      recommendedProductIds: [],
+    };
+  }
+
+  const visibleCats = categories.filter((c) => c.isActive !== false);
+  const visiblePartners = partners.filter((p) => p.isVisible !== false);
+  const activeProducts = products.filter((p) => {
+    if (p.status === 'archived' || p.status === 'inactive' || p.isArchived) return false;
+    const parentCat = categories.find(
+      (c) => c.id === p.categoryId || c.name.toLowerCase() === (p.categoryName || '').toLowerCase()
+    );
+    if (parentCat && parentCat.isActive === false) return false;
+    if (parentCat && p.subcategoryId) {
+      const sub = (parentCat.subcategories || []).find(
+        (s) => s.id === p.subcategoryId || s.slug === p.subcategoryId
+      );
+      if (sub && sub.isActive === false) return false;
+    }
+    return true;
+  });
+
+  const canAccessCatalog = settings.aiAccessProductCatalog !== false;
+  const canAccessOrders = settings.aiAccessCustomerOrders !== false;
+  const maxRecs = Math.max(1, Math.min(6, Number(settings.aiMaxRecommendations || 3)));
+
+  // Filter authenticated customer's own orders strictly
+  let customerOwnOrders: typeof orders = [];
+  if (canAccessOrders && customerAccount && (customerAccount.id || customerAccount.email || customerAccount.phone)) {
+    const cleanEmail = (customerAccount.email || '').trim().toLowerCase();
+    const cleanPhone = (customerAccount.phone || '').replace(/[^0-9]/g, '');
+    const cleanId = (customerAccount.id || '').trim();
+
+    customerOwnOrders = orders.filter((o) => {
+      if (cleanId && o.customerId && o.customerId === cleanId) return true;
+      if (cleanEmail && o.customer?.email && o.customer.email.trim().toLowerCase() === cleanEmail) return true;
+      if (cleanPhone && cleanPhone.length >= 7 && o.customer?.phone) {
+        const oPhone = o.customer.phone.replace(/[^0-9]/g, '');
+        if (oPhone && (oPhone.includes(cleanPhone) || cleanPhone.includes(oPhone))) return true;
+      }
+      return false;
+    });
+  }
 
   // Create real-time catalog context grounded in Supabase
-  const catalogSummary = activeProducts
+  const catalogSummary = canAccessCatalog
+    ? activeProducts
+        .map((p) => {
+          const specsStr = (p.specifications || [])
+            .map((s) => `${s.key}: ${s.value}`)
+            .join(', ');
+          return `- [ID: ${p.id}] [Category: ${p.categoryName}${p.subcategoryName ? ` > ${p.subcategoryName}` : ''}] "${p.name}" | Brand: ${p.brand} | SKU: ${p.sku} | Price: PKR ${(p.salePrice || p.price).toLocaleString()}${p.salePrice && p.salePrice < p.price ? ` (Regular PKR ${p.price.toLocaleString()})` : ''} | Stock: ${p.stock > 0 ? `${p.stock} units In Stock` : 'Out of Stock'} | Warranty: ${p.warranty} | Specs: ${specsStr || 'Standard'}`;
+        })
+        .join('\n')
+    : 'Product catalog access is currently disabled by administrator.';
+
+  const categoriesSummary = visibleCats
     .map(
-      (p) =>
-        `- [ID: ${p.id}] [${p.categoryName}] ${p.name} (SKU: ${p.sku}, Price: Rs. ${(p.salePrice || p.price).toLocaleString()}, Stock: ${p.stock > 0 ? `${p.stock} In Stock` : 'Out of Stock'}, Warranty: ${p.warranty}). Key Features: ${(p.features || []).slice(0, 3).join('; ')}`
+      (c) =>
+        `- ${c.name}: Subcategories: ${(c.subcategories || [])
+          .filter((s) => s.isActive !== false)
+          .map((s) => s.name)
+          .join(', ') || 'General'}`
     )
     .join('\n');
 
-  const systemInstruction = `You are "M.A. Smart Assistant", the knowledgeable technical sales and engineering advisor for "M.A. GROUP OF COMPANIES" (Headquartered in Lahore, Pakistan).
+  const partnersSummary = visiblePartners
+    .map(
+      (pt) =>
+        `- ${pt.name} (${pt.country || 'Pakistan'}) — ${pt.partnerStatus || 'Certified Partner'} | Certification: ${pt.certification || 'Verified'} | Categories: ${(pt.categories || []).join(', ')}`
+    )
+    .join('\n');
+
+  const customerOrderContext =
+    canAccessOrders && customerAccount
+      ? customerOwnOrders.length > 0
+        ? `AUTHENTICATED CUSTOMER (${customerAccount.fullName || customerAccount.email}) ORDERS:\n` +
+          customerOwnOrders
+            .map(
+              (o) =>
+                `- Order #${o.orderNumber}: Status="${o.status}", Payment="${o.paymentStatus}" (PKR ${o.grandTotal.toLocaleString()} COD),Placed: ${new Date(o.createdAt).toLocaleDateString()}, Items: ${o.items.map((i) => `${i.quantity}x ${i.productName}`).join(', ')}${o.trackingNumber ? `, Tracking: ${o.trackingNumber} (${o.courierName || 'Courier'})` : ''}`
+            )
+            .join('\n')
+        : `AUTHENTICATED CUSTOMER (${customerAccount.fullName || customerAccount.email}) currently has 0 orders on record.`
+      : 'CUSTOMER IS NOT SIGNED IN (Guest Session). For privacy, you CANNOT access or reveal any specific order details unless the customer signs in to their account first.';
+
+  const customAdminInstructions = settings.aiSystemInstructions
+    ? `\nADDITIONAL ADMIN INSTRUCTIONS:\n${settings.aiSystemInstructions}\n`
+    : '';
+
+  const systemInstruction = `You are "M.A. SMART ASSISTANT" ("${settings.aiTagline || 'Your intelligent shopping assistant.'}"), the official AI shopping assistant for "M.A. GROUP OF COMPANIES".
 
 OUR STORE PROFILE & POLICIES:
-- Store Name: M.A. GROUP OF COMPANIES
-- Primary Market: Pakistan (Lahore, Karachi, Islamabad, Rawalpindi, Faisalabad, Multan, Peshawar, Quetta, and all cities).
-- Payment Method: ONLY Cash on Delivery (COD). Customers pay cash at their doorstep to courier upon inspection.
-- Currency: Pakistani Rupees (PKR / Rs.).
-- Shipping: Free delivery across Pakistan on orders above Rs. ${(settings.freeShippingThreshold || 5000).toLocaleString()}. Standard delivery Rs. ${settings.standardShippingFee || 450}. Delivery within 2-4 business days.
-- Contact: ${settings.contactPhone || 'Official Support'} / Email: ${settings.contactEmail}.
+- Brand Name: M.A. GROUP OF COMPANIES
+- Assistant Name: M.A. SMART ASSISTANT
+- Primary Market: Pakistan (Nationwide delivery).
+- Payment Method: Cash on Delivery (COD) in PKR. Customers pay cash at their doorstep upon delivery inspection.
+- Currency: Pakistani Rupees (PKR).
+- Shipping: Free delivery across Pakistan on orders above PKR ${(settings.freeShippingThreshold || 5000).toLocaleString()}. Standard delivery fee PKR ${settings.standardShippingFee || 450}.
+- Contact Email: ${settings.contactEmail || 'info@magroupofcompanies.pk'}${settings.contactPhone ? ` | Phone: ${settings.contactPhone}` : ''}.
 
-STORE REAL PRODUCT CATALOG (GROUNDED IN SUPABASE — YOU MUST ONLY RECOMMEND THESE PRODUCTS):
+LIVE CATEGORIES & SUBCATEGORIES:
+${categoriesSummary}
+
+CERTIFIED MANUFACTURING PARTNERS:
+${partnersSummary}
+
+LIVE SUPABASE PRODUCT CATALOG (GROUNDED SOURCE OF TRUTH):
 ${catalogSummary}
 
-CRITICAL RULES:
-1. ONLY recommend real products that exist in our catalog above. NEVER invent products, prices, fake warranty periods, or nonexistent specs.
-2. Always include the exact SKU or product name when recommending items so the customer can add them to their cart.
-3. If asked about solar sizing (e.g. for a 1.5-ton inverter AC or 5-Marla / 10-Marla house):
-   - A 1.5-ton inverter AC consumes approx 1.2kW - 1.8kW during startup/run.
-   - Recommend matching solar inverters, panels, and lithium batteries from our live catalog with exact prices in PKR.
-4. If asked about electrical cables or switches, explain safety specs (e.g., pure copper 70/0.0076 for AC lines/power circuits, circuit breakers).
-5. Always maintain a polite, professional, and helpful tone. Mention Cash on Delivery availability across Pakistan.`;
+AUTHENTICATED CUSTOMER ORDER CONTEXT:
+${customerOrderContext}
+${customAdminInstructions}
+CRITICAL AI SAFETY & ACCURACY RULES:
+1. NEVER invent products, prices, stock quantities, specifications, certifications, manufacturer relationships, or warranties. Only use the exact data listed above.
+2. If a customer asks for a product or budget (e.g., "solar inverter under PKR 200,000") and no matching product exists in the live catalog under that budget, clearly and honestly state that there are currently no matching products under that price in our catalog, and show the closest actual available option with its real PKR price.
+3. When comparing two or more products, compare their actual database attributes: Price (PKR), Brand, Specifications, Warranty, and Stock Availability.
+4. For technical shopping advice (such as choosing a solar system), ask helpful clarifying questions when needed:
+   - Estimated electricity usage, number of ACs, number of fans, refrigerator, other appliances, day/night usage, and battery backup requirements.
+   - Then recommend matching available products from our catalog or suggest requesting a formal quotation via our B2B / Wholesale section.
+5. PRIVACY & SECURITY: Never reveal another customer's order, personal data, admin credentials, or database keys. If a guest asks to check an order, politely ask them to sign in to their account or use the "Track Order" page with their Order ID and registered phone number.`;
 
   let replyText = '';
 
@@ -103,7 +201,7 @@ CRITICAL RULES:
         contents,
         config: {
           systemInstruction,
-          temperature: 0.6,
+          temperature: 0.4,
         },
       });
 
@@ -111,85 +209,153 @@ CRITICAL RULES:
         replyText = response.text;
       }
     } catch (error) {
-      console.warn('Gemini generateContent error, switching to catalog rule fallback:', error);
+      console.warn('Gemini generateContent error, switching to grounded catalog rule engine:', error);
     }
   }
 
   const q = userQuery.toLowerCase();
 
   if (!replyText) {
-    if (q.includes('solar') || q.includes('inverter') || q.includes('panel') || q.includes('battery') || q.includes('ac')) {
+    // Check if user is asking about orders / tracking
+    if (q.includes('track') || q.includes('my order') || q.includes('order status') || q.includes('mag-')) {
+      if (!canAccessOrders) {
+        replyText =
+          'Order lookup via chat is currently disabled. Please use the **Track Order** page in the top navigation bar with your Order ID (e.g., `MAG-9214`) and phone number.';
+      } else if (customerAccount && customerOwnOrders.length > 0) {
+        const orderLines = customerOwnOrders
+          .slice(0, 3)
+          .map(
+            (o) =>
+              `• **Order #${o.orderNumber}** — Status: **${o.status}** | Total: **PKR ${o.grandTotal.toLocaleString()}** (${o.paymentStatus})${o.trackingNumber ? ` | Tracking: \`${o.trackingNumber}\`` : ''}`
+          )
+          .join('\n');
+        replyText = `Here is the live status of your authenticated account orders with **M.A. GROUP OF COMPANIES**:\n\n${orderLines}\n\nYou can also view full delivery timelines and print your official invoice under **My Account → My Orders**.`;
+      } else if (customerAccount && customerOwnOrders.length === 0) {
+        replyText = `Hello ${customerAccount.fullName || ''}! You are signed in, but there are currently no orders linked to your account (${customerAccount.email}). If you placed an order as a guest, you can track it anytime on the **Track Order** page using your Order Number and phone number.`;
+      } else {
+        replyText =
+          'To protect customer privacy, **M.A. SMART ASSISTANT** only displays order details for your own signed-in account.\n\nPlease **Sign In** via the Account menu to view your orders here, or visit the **Track Order** page with your Order ID and registered phone number.';
+      }
+    } else if (q.includes('under') || q.includes('budget') || q.includes('below') || q.includes('less than')) {
+      // Parse numeric budget from query (e.g. "under PKR 200,000" or "under 50000")
+      const numMatch = userQuery.replace(/,/g, '').match(/(\d{3,8})/);
+      const budget = numMatch ? Number(numMatch[1]) : null;
+      const categoryKeyword = ['solar', 'inverter', 'panel', 'battery', 'cable', 'wire', 'breaker', 'switch', 'sanitary', 'faucet', 'basin', 'hob', 'hood', 'ev', 'bike', 'tool', 'drill'].find((kw) =>
+        q.includes(kw)
+      );
+
+      let pool = activeProducts;
+      if (categoryKeyword) {
+        pool = activeProducts.filter(
+          (p) =>
+            p.name.toLowerCase().includes(categoryKeyword) ||
+            p.categoryName.toLowerCase().includes(categoryKeyword) ||
+            (p.subcategoryName || '').toLowerCase().includes(categoryKeyword) ||
+            p.description.toLowerCase().includes(categoryKeyword)
+        );
+      }
+
+      if (budget !== null) {
+        const withinBudget = pool
+          .filter((p) => (p.salePrice || p.price) <= budget)
+          .sort((a, b) => (a.salePrice || a.price) - (b.salePrice || b.price));
+
+        if (withinBudget.length > 0) {
+          const list = withinBudget
+            .slice(0, maxRecs)
+            .map(
+              (p) =>
+                `• **${p.name}** (SKU: \`${p.sku}\`) — **PKR ${(p.salePrice || p.price).toLocaleString()}** | Stock: ${p.stock > 0 ? `${p.stock} In Stock` : 'Out of Stock'} | Warranty: ${p.warranty}`
+            )
+            .join('\n');
+          replyText = `Here are the matching products from the **M.A. GROUP OF COMPANIES** catalog under **PKR ${budget.toLocaleString()}**:\n\n${list}\n\nAll items are available via **Cash on Delivery (COD)** across Pakistan.`;
+        } else {
+          const closest = [...pool].sort((a, b) => (a.salePrice || a.price) - (b.salePrice || b.price))[0];
+          replyText = `We currently do not have a matching ${categoryKeyword || 'product'} under **PKR ${budget.toLocaleString()}** in our live catalog.${
+            closest
+              ? `\n\nThe closest genuine option available in our catalog is:\n• **${closest.name}** (SKU: \`${closest.sku}\`) — **PKR ${(closest.salePrice || closest.price).toLocaleString()}** (${closest.warranty})`
+              : ''
+          }\n\nPlease let me know if you would like to explore other categories or adjust your budget!`;
+        }
+      } else {
+        const affordable = [...activeProducts]
+          .sort((a, b) => (a.salePrice || a.price) - (b.salePrice || b.price))
+          .slice(0, maxRecs)
+          .map(
+            (p) =>
+              `• **${p.name}** (SKU: \`${p.sku}\`) — **PKR ${(p.salePrice || p.price).toLocaleString()}** (${p.categoryName})`
+          )
+          .join('\n');
+        replyText = `Please share your target budget in **PKR** and the product category you are looking for (e.g., *"Solar inverter under PKR 350,000"* or *"Kitchen hob under PKR 40,000"*).\n\nHere are some of our popular value picks across the catalog:\n\n${affordable}`;
+      }
+    } else if (q.includes('compare')) {
+      const sample = activeProducts.slice(0, 2);
+      if (sample.length === 2) {
+        replyText = `I can compare any products from our live catalog side-by-side! Here is a comparison of two popular items:\n\n1. **${sample[0].name}** (SKU: \`${sample[0].sku}\`)\n   - **Brand:** ${sample[0].brand}\n   - **Price:** PKR ${(sample[0].salePrice || sample[0].price).toLocaleString()}\n   - **Warranty:** ${sample[0].warranty}\n   - **Availability:** ${sample[0].stock > 0 ? `${sample[0].stock} units In Stock` : 'Out of Stock'}\n\n2. **${sample[1].name}** (SKU: \`${sample[1].sku}\`)\n   - **Brand:** ${sample[1].brand}\n   - **Price:** PKR ${(sample[1].salePrice || sample[1].price).toLocaleString()}\n   - **Warranty:** ${sample[1].warranty}\n   - **Availability:** ${sample[1].stock > 0 ? `${sample[1].stock} units In Stock` : 'Out of Stock'}\n\nTell me which two products or categories you would like me to compare!`;
+      }
+    } else if (q.includes('help me choose') || q.includes('solar') || q.includes('inverter') || q.includes('panel') || q.includes('battery')) {
       const solarProds = activeProducts.filter(
         (p) => p.categoryId === 'cat-solar' || p.categoryName.toLowerCase().includes('solar')
       );
       const items = solarProds
-        .slice(0, 3)
-        .map((p) => `• **${p.name}** (SKU: ${p.sku}) - Rs. ${(p.salePrice || p.price).toLocaleString()} (${p.warranty})`)
+        .slice(0, maxRecs)
+        .map(
+          (p) =>
+            `• **${p.name}** (SKU: \`${p.sku}\`) — **PKR ${(p.salePrice || p.price).toLocaleString()}** | ${p.warranty} | ${p.stock > 0 ? 'In Stock' : 'Out of Stock'}`
+        )
         .join('\n');
-      replyText = `Hello! For solar systems in Pakistan, M.A. GROUP OF COMPANIES supplies Tier-1 certified equipment with official manufacturer warranties:\n\n${items}\n\nWe provide nationwide delivery with 100% Cash on Delivery (COD) across Pakistan.`;
-    } else if (q.includes('cable') || q.includes('wire') || q.includes('breaker') || q.includes('switch')) {
-      const elecProds = activeProducts.filter(
-        (p) => p.categoryId === 'cat-electrical' || p.categoryName.toLowerCase().includes('electrical')
-      );
-      const items = elecProds
-        .slice(0, 3)
-        .map((p) => `• **${p.name}** (SKU: ${p.sku}) - Rs. ${(p.salePrice || p.price).toLocaleString()}`)
-        .join('\n');
-      replyText = `M.A. GROUP OF COMPANIES is an authorized distributor of 99.99% pure copper cables and certified circuit breakers:\n\n${items}\n\nAll electrical accessories are delivered directly via Cash on Delivery (COD) anywhere in Pakistan.`;
-    } else if (q.includes('hob') || q.includes('hood') || q.includes('kitchen')) {
-      const kitchenProds = activeProducts.filter(
-        (p) => p.categoryId === 'cat-hobs-hoods' || p.categoryName.toLowerCase().includes('hob')
-      );
-      const items = kitchenProds
-        .map((p) => `• **${p.name}** (SKU: ${p.sku}) - Rs. ${(p.salePrice || p.price).toLocaleString()}`)
-        .join('\n');
-      replyText = `Our Italian-inspired kitchen appliances collection includes:\n\n${items}\n\nFeatures include auto-ignition, heavy brass burners, and wave-gesture suction hoods with full warranty.`;
-    } else if (q.includes('ev') || q.includes('bike') || q.includes('electric bike')) {
-      const evProds = activeProducts.filter(
-        (p) => p.categoryId === 'cat-ev-bikes' || p.categoryName.toLowerCase().includes('ev')
-      );
-      const items = evProds
-        .map((p) => `• **${p.name}** (SKU: ${p.sku}) - Rs. ${(p.salePrice || p.price).toLocaleString()}`)
-        .join('\n');
-      replyText = `Our Green Mobility division features high-range Lithium Electric Commuter Motorbikes:\n\n${items}\n\nDelivers up to 100 km real-world range per charge with doorstep COD delivery!`;
+      replyText = `I would be happy to help you choose the right solar or electrical solution! To give you an exact recommendation, please share:\n- **Number of ACs** (e.g., 1x or 2x 1.5-Ton Inverter ACs)\n- **Number of Fans & Lights**\n- **Refrigerator / Water Pump usage**\n- **Daytime vs. Nighttime backup requirements**\n\nHere are the verified solar products currently available in our catalog:\n\n${items}`;
+    } else if (q.includes('contact') || q.includes('support') || q.includes('quote')) {
+      replyText = `You can reach **M.A. GROUP OF COMPANIES** through any of the following official channels:\n\n• **Email:** ${settings.contactEmail || 'info@magroupofcompanies.pk'}\n${settings.contactPhone ? `• **Phone:** ${settings.contactPhone}\n` : ''}• **B2B & Project Quotations:** Click **Contact** or **B2B / Wholesale** in the navigation menu to request a customized commercial quote.\n• **Payment & Delivery:** Nationwide Cash on Delivery (COD) in PKR across Pakistan.`;
     } else {
       const matched = activeProducts.filter(
         (p) =>
           p.name.toLowerCase().includes(q) ||
           p.categoryName.toLowerCase().includes(q) ||
+          (p.subcategoryName || '').toLowerCase().includes(q) ||
           p.brand.toLowerCase().includes(q) ||
+          p.sku.toLowerCase().includes(q) ||
           (p.tags || []).some((t) => q.includes(t.toLowerCase()))
       );
       if (matched.length > 0) {
         const top = matched
-          .slice(0, 3)
-          .map((p) => `• **${p.name}** (SKU: ${p.sku}) - Rs. ${(p.salePrice || p.price).toLocaleString()} [${p.stock > 0 ? 'In Stock' : 'Out of Stock'}]`)
+          .slice(0, maxRecs)
+          .map(
+            (p) =>
+              `• **${p.name}** (SKU: \`${p.sku}\`) — **PKR ${(p.salePrice || p.price).toLocaleString()}** [${p.stock > 0 ? `${p.stock} In Stock` : 'Out of Stock'}] (${p.warranty})`
+          )
           .join('\n');
-        replyText = `Here are the matching products from the M.A. GROUP OF COMPANIES live Supabase catalog:\n\n${top}\n\nAll products come with genuine manufacturer warranty and Cash on Delivery (COD) across Pakistan.`;
+        replyText = `Here are the matching products from the **M.A. GROUP OF COMPANIES** live Supabase catalog:\n\n${top}\n\nAll items are backed by official warranty and nationwide **Cash on Delivery (COD)**.`;
       } else {
-        const newest = activeProducts
-          .slice(0, 3)
-          .map((p) => `• **${p.name}** (SKU: ${p.sku}) - Rs. ${(p.salePrice || p.price).toLocaleString()}`)
+        const featured = activeProducts
+          .slice(0, maxRecs)
+          .map(
+            (p) =>
+              `• **${p.name}** (SKU: \`${p.sku}\`) — **PKR ${(p.salePrice || p.price).toLocaleString()}** (${p.categoryName})`
+          )
           .join('\n');
-        replyText = `Welcome to M.A. GROUP OF COMPANIES! Here are some of our top catalog products available with Cash on Delivery across Pakistan:\n\n${newest}\n\nFeel free to ask about product specifications, solar load calculations, or order delivery!`;
+        replyText = `Hello! I'm **M.A. SMART ASSISTANT**. I can help you search products by category or subcategory, filter within your PKR budget, compare technical specifications, or check your order status.\n\nHere are some featured items from our live catalog:\n\n${featured}`;
       }
     }
   }
 
   // Match recommended products from reply or query
   const lowerReply = replyText.toLowerCase();
-  const recommended = activeProducts
-    .filter((p) => {
-      const skuMatch = p.sku && (lowerReply.includes(p.sku.toLowerCase()) || q.includes(p.sku.toLowerCase()));
-      const nameWords = p.name
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((w) => w.length > 3);
-      const nameHit = nameWords.length > 0 && nameWords.slice(0, 3).every((w) => lowerReply.includes(w) || q.includes(w));
-      return skuMatch || nameHit;
-    })
-    .slice(0, 3)
-    .map((p) => p.id);
+  const recommended = canAccessCatalog
+    ? activeProducts
+        .filter((p) => {
+          const skuMatch = p.sku && (lowerReply.includes(p.sku.toLowerCase()) || q.includes(p.sku.toLowerCase()));
+          const nameWords = p.name
+            .toLowerCase()
+            .split(/\s+/)
+            .filter((w) => w.length > 3);
+          const nameHit =
+            nameWords.length > 0 && nameWords.slice(0, 3).every((w) => lowerReply.includes(w) || q.includes(w));
+          return skuMatch || nameHit;
+        })
+        .slice(0, maxRecs)
+        .map((p) => p.id)
+    : [];
 
   return {
     reply: replyText,

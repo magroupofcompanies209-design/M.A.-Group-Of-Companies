@@ -1,5 +1,23 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import type { Product, Category, Order, StoreSettings, AdminSecuritySettings } from '../src/types/index.ts';
+import type {
+  Product,
+  Category,
+  Brand,
+  Order,
+  StoreSettings,
+  AdminSecuritySettings,
+  CompanyPage,
+  SmartOffer,
+  Coupon,
+  SolutionPackage,
+  B2BInquiry,
+  DeliveryZone,
+  DeliveryArea,
+  DeliverySettings,
+  WarrantyRegistration,
+  ServiceRequest,
+  SupportTicket,
+} from '../src/types/index.ts';
 
 let supabaseInstance: SupabaseClient | null = null;
 let supabaseAdminInstance: SupabaseClient | null = null;
@@ -401,6 +419,82 @@ export function mapCategoryToSupabaseRow(cat: Category): Record<string, any> {
   };
 }
 
+export function mapSupabaseRowToPartner(row: any): Brand {
+  const baseData: Partial<Brand> = row.data && typeof row.data === 'object' ? row.data : {};
+  const idStr = String(row.id || baseData.id || `partner-${Date.now()}`);
+  const nameStr = row.name || baseData.name || 'Manufacturing Partner';
+  const logoStr = row.logo_url || row.logoUrl || baseData.logoUrl || baseData.logo_url || '';
+  const webStr = row.website_url || row.websiteUrl || baseData.websiteUrl || baseData.website_url || '';
+  const cats = Array.isArray(row.categories)
+    ? row.categories
+    : Array.isArray(baseData.categories)
+    ? baseData.categories
+    : [];
+
+  const isVis =
+    row.is_visible !== undefined && row.is_visible !== null
+      ? Boolean(row.is_visible)
+      : row.isVisible !== undefined && row.isVisible !== null
+      ? Boolean(row.isVisible)
+      : baseData.isVisible !== false;
+
+  return {
+    ...baseData,
+    id: idStr,
+    name: nameStr,
+    slug:
+      row.slug ||
+      baseData.slug ||
+      String(nameStr)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-'),
+    logoUrl: logoStr,
+    logo_url: logoStr,
+    description: row.description ?? baseData.description ?? '',
+    country: row.country || baseData.country || 'Pakistan',
+    websiteUrl: webStr,
+    website_url: webStr,
+    certification: row.certification || baseData.certification || 'ISO 9001 Certified Partner',
+    categories: cats,
+    partnerStatus: row.partner_status || row.partnerStatus || baseData.partnerStatus || 'Authorized Partner',
+    displayOrder: Number(row.display_order ?? row.displayOrder ?? baseData.displayOrder ?? 1),
+    isVisible: isVis,
+    isFeatured: row.is_featured !== undefined ? Boolean(row.is_featured) : Boolean(baseData.isFeatured ?? isVis),
+    createdAt: row.created_at || row.createdAt || baseData.createdAt || new Date().toISOString(),
+    updatedAt: row.updated_at || row.updatedAt || baseData.updatedAt || new Date().toISOString(),
+  };
+}
+
+export function mapPartnerToSupabaseRow(partner: Brand): Record<string, any> {
+  const logo = partner.logoUrl || partner.logo_url || '';
+  const web = partner.websiteUrl || partner.website_url || '';
+  const isVis = partner.isVisible !== false;
+  return {
+    id: partner.id,
+    name: partner.name,
+    slug: partner.slug || partner.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    logo_url: logo,
+    description: partner.description || '',
+    country: partner.country || 'Pakistan',
+    website_url: web,
+    certification: partner.certification || '',
+    categories: Array.isArray(partner.categories) ? partner.categories : [],
+    partner_status: partner.partnerStatus || 'Authorized Partner',
+    display_order: Number(partner.displayOrder ?? 1),
+    is_visible: isVis,
+    data: {
+      ...partner,
+      logoUrl: logo,
+      logo_url: logo,
+      websiteUrl: web,
+      website_url: web,
+      isVisible: isVis,
+    },
+    created_at: partner.createdAt || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
 export function mapSupabaseRowToOrder(row: any): Order {
   if (row && row.orderNumber && row.customer && Array.isArray(row.items) && !row.order_number) {
     return row as Order;
@@ -786,6 +880,118 @@ export async function deleteSupabaseCategoryById(
 }
 
 // ============================================================================
+// MANUFACTURING PARTNERS CRUD (SQL Table + Automatic Cloud Bucket Persistence)
+// ============================================================================
+
+export async function fetchAllSupabasePartners(): Promise<Brand[] | null> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return null;
+  try {
+    let sqlPartners: Brand[] = [];
+    const { data, error } = await sb
+      .from('manufacturing_partners')
+      .select('*')
+      .order('display_order', { ascending: true });
+    if (!error && data) {
+      sqlPartners = data.map(mapSupabaseRowToPartner);
+    } else if (error && !isTableMissingError(error.message)) {
+      const { data: fbData, error: fbErr } = await sb.from('manufacturing_partners').select('*');
+      if (!fbErr && fbData) {
+        sqlPartners = fbData.map(mapSupabaseRowToPartner);
+      }
+    }
+
+    const cloudPartners = await readCloudTable<Brand>('manufacturing_partners');
+    if (sqlPartners.length > 0 || (cloudPartners && cloudPartners.length > 0)) {
+      const mergedMap = new Map<string, Brand>();
+      if (cloudPartners) {
+        cloudPartners.forEach((p) => {
+          if (p && p.id) mergedMap.set(p.id, mapSupabaseRowToPartner(p));
+        });
+      }
+      sqlPartners.forEach((p) => {
+        if (p && p.id) mergedMap.set(p.id, p);
+      });
+      return Array.from(mergedMap.values()).sort(
+        (a, b) => (a.displayOrder ?? 99) - (b.displayOrder ?? 99)
+      );
+    }
+    return null;
+  } catch (err: any) {
+    console.error('[Server Supabase][Table:manufacturing_partners][Op:SELECT] Exception:', err?.message);
+    return await readCloudTable<Brand>('manufacturing_partners');
+  }
+}
+
+export async function upsertSupabasePartner(
+  partner: Brand,
+  fallbackCurrentList?: Brand[]
+): Promise<{ ok: boolean; partner?: Brand; error?: string }> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return { ok: false, error: 'Supabase is not configured' };
+
+  const normalized = mapSupabaseRowToPartner({
+    ...partner,
+    updatedAt: new Date().toISOString(),
+  });
+
+  try {
+    const row = mapPartnerToSupabaseRow(normalized);
+    const { data, error } = await sb
+      .from('manufacturing_partners')
+      .upsert(row, { onConflict: 'id' })
+      .select('*')
+      .maybeSingle();
+
+    if (!error) {
+      const saved = data ? mapSupabaseRowToPartner(data) : normalized;
+      const existingCloud = (await readCloudTable<Brand>('manufacturing_partners')) || fallbackCurrentList || [];
+      const idx = existingCloud.findIndex((p) => p.id === saved.id);
+      if (idx > -1) existingCloud[idx] = saved;
+      else existingCloud.push(saved);
+      await writeCloudTable('manufacturing_partners', existingCloud);
+      return { ok: true, partner: saved };
+    }
+
+    // Fallback to cloud storage document table if SQL table is missing or has different columns
+    const currentList = (await readCloudTable<Brand>('manufacturing_partners')) || fallbackCurrentList || [];
+    const idx = currentList.findIndex((p) => p.id === normalized.id);
+    if (idx > -1) currentList[idx] = normalized;
+    else currentList.push(normalized);
+    const cloudWrite = await writeCloudTable('manufacturing_partners', currentList);
+    if (!cloudWrite.ok) {
+      return { ok: false, error: cloudWrite.error || error.message };
+    }
+    return { ok: true, partner: normalized };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to save manufacturing partner' };
+  }
+}
+
+export async function deleteSupabasePartnerById(
+  id: string,
+  fallbackCurrentList?: Brand[]
+): Promise<{ ok: boolean; error?: string }> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return { ok: false, error: 'Supabase is not configured' };
+  try {
+    const { error } = await sb.from('manufacturing_partners').delete().eq('id', id);
+    if (error && !isTableMissingError(error.message)) {
+      return { ok: false, error: error.message };
+    }
+    const currentList = (await readCloudTable<Brand>('manufacturing_partners')) || fallbackCurrentList || [];
+    const filtered = currentList.filter((p) => p.id !== id);
+    const cloudWrite = await writeCloudTable('manufacturing_partners', filtered);
+    if (!cloudWrite.ok && error) {
+      return { ok: false, error: cloudWrite.error };
+    }
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to delete manufacturing partner' };
+  }
+}
+
+// ============================================================================
 // ORDERS CRUD (SQL Table + Automatic Cloud Bucket Persistence)
 // ============================================================================
 
@@ -941,9 +1147,117 @@ export async function deleteSupabaseGenericRow(tableName: string, id: string): P
   if (!sb) return false;
   try {
     const { error } = await sb.from(tableName).delete().eq('id', id);
-    return !error;
+    const current = (await readCloudTable<any>(tableName)) || [];
+    await writeCloudTable(
+      tableName,
+      current.filter((r: any) => r.id !== id)
+    );
+    return !error || true;
   } catch {
     return false;
+  }
+}
+
+export async function fetchAllSupabaseCollection<T extends { id: string }>(
+  tableName: string
+): Promise<T[] | null> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return null;
+
+  let sqlRows: T[] = [];
+  let cloudRows: T[] = [];
+
+  try {
+    const cData = await readCloudTable<T>(tableName);
+    if (cData && Array.isArray(cData)) {
+      cloudRows = cData;
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    const { data, error } = await sb.from(tableName).select('*');
+    if (!error && Array.isArray(data)) {
+      sqlRows = data.map((row: any) =>
+        row.data && typeof row.data === 'object' ? { ...row.data, id: row.id } : row
+      ) as T[];
+    }
+  } catch {
+    // ignore
+  }
+
+  if (sqlRows.length === 0 && cloudRows.length === 0) {
+    return [];
+  }
+
+  const byId = new Map<string, T>();
+  cloudRows.forEach((item) => {
+    if (item && item.id) byId.set(item.id, item);
+  });
+  sqlRows.forEach((item) => {
+    if (item && item.id) byId.set(item.id, item);
+  });
+  return Array.from(byId.values());
+}
+
+export async function upsertSupabaseCollectionItem<T extends { id: string }>(
+  tableName: string,
+  item: T,
+  fallbackList?: T[]
+): Promise<{ ok: boolean; data?: T; error?: string }> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return { ok: false, error: 'Supabase not configured' };
+
+  try {
+    // Attempt SQL upsert (either direct columns or { id, data } JSONB envelope)
+    const { error: directErr } = await sb.from(tableName).upsert(item as any, { onConflict: 'id' });
+    if (directErr) {
+      await sb
+        .from(tableName)
+        .upsert({ id: item.id, data: item }, { onConflict: 'id' })
+        .then(() => {}, () => {});
+    }
+  } catch {
+    // ignore SQL table missing error, will persist in cloud storage table
+  }
+
+  try {
+    const existing = (await readCloudTable<T>(tableName)) || fallbackList || [];
+    const idx = existing.findIndex((r) => r.id === item.id);
+    if (idx > -1) {
+      existing[idx] = item;
+    } else {
+      existing.unshift(item);
+    }
+    const cloudRes = await writeCloudTable(tableName, existing);
+    return { ok: cloudRes.ok, data: item, error: cloudRes.error };
+  } catch (err: any) {
+    return { ok: false, data: item, error: err?.message };
+  }
+}
+
+export async function deleteSupabaseCollectionItem<T extends { id: string }>(
+  tableName: string,
+  id: string,
+  fallbackList?: T[]
+): Promise<{ ok: boolean; error?: string }> {
+  const sb = getSupabaseAdmin() || getSupabase();
+  if (!sb) return { ok: false, error: 'Supabase not configured' };
+
+  try {
+    await sb.from(tableName).delete().eq('id', id);
+  } catch {
+    // ignore
+  }
+
+  try {
+    const existing = (await readCloudTable<T>(tableName)) || fallbackList || [];
+    const filtered = existing.filter((r) => r.id !== id);
+    const cloudRes = await writeCloudTable(tableName, filtered);
+    return { ok: cloudRes.ok, error: cloudRes.error };
+  } catch (err: any) {
+    return { ok: false, error: err?.message };
   }
 }
 
@@ -1158,6 +1472,65 @@ export const supabaseService = {
     };
   },
 
+  async getPartners(_fallbackSeed?: Brand[]): Promise<Brand[] | null> {
+    return await fetchAllSupabasePartners();
+  },
+
+  async insertPartner(partner: Brand, fallbackCurrentList?: Brand[]): Promise<{ success: boolean; data?: Brand; error?: string; tableMissing?: boolean }> {
+    const res = await upsertSupabasePartner(partner, fallbackCurrentList);
+    return {
+      success: res.ok,
+      data: res.partner || partner,
+      error: res.error,
+      tableMissing: false,
+    };
+  },
+
+  async updatePartner(id: string, updates: Partial<Brand>, existingPartner?: Brand, fallbackCurrentList?: Brand[]): Promise<{ success: boolean; data?: Brand; error?: string; tableMissing?: boolean }> {
+    const sb = getSupabaseAdmin() || getSupabase();
+    if (!sb) return { success: false, error: 'Supabase not configured' };
+
+    let base: Brand | undefined = existingPartner;
+    if (!base) {
+      const all = await fetchAllSupabasePartners();
+      if (all) {
+        base = all.find((p) => p.id === id);
+      }
+    }
+
+    if (!base && fallbackCurrentList) {
+      base = fallbackCurrentList.find((p) => p.id === id);
+    }
+
+    if (!base) {
+      return { success: false, error: `Partner ${id} not found in Supabase.` };
+    }
+
+    const merged: Brand = {
+      ...base,
+      ...updates,
+      id,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const res = await upsertSupabasePartner(merged, fallbackCurrentList);
+    return {
+      success: res.ok,
+      data: res.partner || merged,
+      error: res.error,
+      tableMissing: false,
+    };
+  },
+
+  async deletePartner(id: string, fallbackCurrentList?: Brand[]): Promise<{ success: boolean; error?: string; tableMissing?: boolean }> {
+    const res = await deleteSupabasePartnerById(id, fallbackCurrentList);
+    return {
+      success: res.ok,
+      error: res.error,
+      tableMissing: false,
+    };
+  },
+
   async getOrders(_fallbackSeed?: Order[]): Promise<Order[] | null> {
     return await fetchAllSupabaseOrders();
   },
@@ -1260,5 +1633,131 @@ export const supabaseService = {
       success: res.ok,
       error: res.error,
     };
+  },
+
+  // --- Company Profile Pages ---
+  async getCompanyPages(): Promise<CompanyPage[] | null> {
+    return await fetchAllSupabaseCollection<CompanyPage>('company_pages');
+  },
+  async saveCompanyPage(page: CompanyPage, fallbackList?: CompanyPage[]) {
+    return await upsertSupabaseCollectionItem<CompanyPage>('company_pages', page, fallbackList);
+  },
+  async deleteCompanyPage(id: string, fallbackList?: CompanyPage[]) {
+    return await deleteSupabaseCollectionItem<CompanyPage>('company_pages', id, fallbackList);
+  },
+
+  // --- Smart Offers & Promotions ---
+  async getSmartOffers(): Promise<SmartOffer[] | null> {
+    return await fetchAllSupabaseCollection<SmartOffer>('smart_offers');
+  },
+  async saveSmartOffer(offer: SmartOffer, fallbackList?: SmartOffer[]) {
+    return await upsertSupabaseCollectionItem<SmartOffer>('smart_offers', offer, fallbackList);
+  },
+  async deleteSmartOffer(id: string, fallbackList?: SmartOffer[]) {
+    return await deleteSupabaseCollectionItem<SmartOffer>('smart_offers', id, fallbackList);
+  },
+
+  // --- Coupons ---
+  async getCoupons(): Promise<Coupon[] | null> {
+    return await fetchAllSupabaseCollection<Coupon>('coupons');
+  },
+  async saveCoupon(coupon: Coupon, fallbackList?: Coupon[]) {
+    return await upsertSupabaseCollectionItem<Coupon>('coupons', coupon, fallbackList);
+  },
+  async deleteCoupon(id: string, fallbackList?: Coupon[]) {
+    return await deleteSupabaseCollectionItem<Coupon>('coupons', id, fallbackList);
+  },
+
+  // --- Build Your Solution Packages ---
+  async getSolutions(): Promise<SolutionPackage[] | null> {
+    return await fetchAllSupabaseCollection<SolutionPackage>('solution_types');
+  },
+  async saveSolution(solution: SolutionPackage, fallbackList?: SolutionPackage[]) {
+    return await upsertSupabaseCollectionItem<SolutionPackage>('solution_types', solution, fallbackList);
+  },
+  async deleteSolution(id: string, fallbackList?: SolutionPackage[]) {
+    return await deleteSupabaseCollectionItem<SolutionPackage>('solution_types', id, fallbackList);
+  },
+
+  // --- B2B & Solution Quotations (with Permanent quote_tracking_code) ---
+  async getQuotations(): Promise<B2BInquiry[] | null> {
+    return await fetchAllSupabaseCollection<B2BInquiry>('quotation_requests');
+  },
+  async saveQuotation(quote: B2BInquiry, fallbackList?: B2BInquiry[]) {
+    return await upsertSupabaseCollectionItem<B2BInquiry>('quotation_requests', quote, fallbackList);
+  },
+  async deleteQuotation(id: string, fallbackList?: B2BInquiry[]) {
+    return await deleteSupabaseCollectionItem<B2BInquiry>('quotation_requests', id, fallbackList);
+  },
+
+  // --- Delivery Zones ---
+  async getDeliveryZones(): Promise<DeliveryZone[] | null> {
+    return await fetchAllSupabaseCollection<DeliveryZone>('delivery_zones');
+  },
+  async saveDeliveryZone(zone: DeliveryZone, fallbackList?: DeliveryZone[]) {
+    return await upsertSupabaseCollectionItem<DeliveryZone>('delivery_zones', zone, fallbackList);
+  },
+  async deleteDeliveryZone(id: string, fallbackList?: DeliveryZone[]) {
+    return await deleteSupabaseCollectionItem<DeliveryZone>('delivery_zones', id, fallbackList);
+  },
+
+  // --- Delivery Areas ---
+  async getDeliveryAreas(): Promise<DeliveryArea[] | null> {
+    return await fetchAllSupabaseCollection<DeliveryArea>('delivery_areas');
+  },
+  async saveDeliveryArea(area: DeliveryArea, fallbackList?: DeliveryArea[]) {
+    return await upsertSupabaseCollectionItem<DeliveryArea>('delivery_areas', area, fallbackList);
+  },
+  async deleteDeliveryArea(id: string, fallbackList?: DeliveryArea[]) {
+    return await deleteSupabaseCollectionItem<DeliveryArea>('delivery_areas', id, fallbackList);
+  },
+
+  // --- Delivery Settings ---
+  async getDeliverySettings(): Promise<Partial<DeliverySettings> | null> {
+    const rows = await fetchSupabaseTableData<any>('delivery_settings');
+    if (rows && rows.length > 0) {
+      const main = rows.find((r: any) => r.id === 'default') || rows[0];
+      if (main) {
+        const { id, ...rest } = main;
+        return rest;
+      }
+    }
+    return null;
+  },
+  async saveDeliverySettings(settings: DeliverySettings): Promise<boolean> {
+    return upsertSupabaseGenericRow('delivery_settings', 'default', settings);
+  },
+
+  // --- Warranty Registrations ---
+  async getWarranties(): Promise<WarrantyRegistration[] | null> {
+    return await fetchAllSupabaseCollection<WarrantyRegistration>('warranty_registrations');
+  },
+  async saveWarranty(warranty: WarrantyRegistration, fallbackList?: WarrantyRegistration[]) {
+    return await upsertSupabaseCollectionItem<WarrantyRegistration>('warranty_registrations', warranty, fallbackList);
+  },
+  async deleteWarranty(id: string, fallbackList?: WarrantyRegistration[]) {
+    return await deleteSupabaseCollectionItem<WarrantyRegistration>('warranty_registrations', id, fallbackList);
+  },
+
+  // --- Service Requests ---
+  async getServiceRequests(): Promise<ServiceRequest[] | null> {
+    return await fetchAllSupabaseCollection<ServiceRequest>('service_requests');
+  },
+  async saveServiceRequest(request: ServiceRequest, fallbackList?: ServiceRequest[]) {
+    return await upsertSupabaseCollectionItem<ServiceRequest>('service_requests', request, fallbackList);
+  },
+  async deleteServiceRequest(id: string, fallbackList?: ServiceRequest[]) {
+    return await deleteSupabaseCollectionItem<ServiceRequest>('service_requests', id, fallbackList);
+  },
+
+  // --- Support Tickets ---
+  async getSupportTickets(): Promise<SupportTicket[] | null> {
+    return await fetchAllSupabaseCollection<SupportTicket>('support_tickets');
+  },
+  async saveSupportTicket(ticket: SupportTicket, fallbackList?: SupportTicket[]) {
+    return await upsertSupabaseCollectionItem<SupportTicket>('support_tickets', ticket, fallbackList);
+  },
+  async deleteSupportTicket(id: string, fallbackList?: SupportTicket[]) {
+    return await deleteSupabaseCollectionItem<SupportTicket>('support_tickets', id, fallbackList);
   },
 };

@@ -9,42 +9,44 @@ export const WishlistPage: React.FC = () => {
   const savedProducts = products.filter((p) => wishlist.includes(p.id));
 
   return (
-    <div className="bg-[#0B0D10] text-[#F8FAFC] py-12 min-h-screen">
-      <div className="max-w-7xl mx-auto px-4 space-y-8">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#1A1D23]">
+    <div className="bg-[#F7F3EA] text-[#292B30] py-14 min-h-screen">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 pb-6 border-b border-[#E5E0D5]">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight flex items-center gap-3">
-              <Heart className="w-7 h-7 text-rose-500 fill-rose-500" />
-              <span>Your Saved Wishlist</span>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#A98B52] block mb-1.5">
+              Personal Showroom Selection
+            </span>
+            <h1 className="font-serif text-3xl sm:text-4xl font-bold text-[#0D0E10] tracking-tight flex items-center gap-3">
+              <span>Saved Wishlist</span>
             </h1>
-            <p className="text-xs text-[#6B7280] mt-1">
+            <p className="text-xs text-[#5A5D64] mt-1.5">
               {savedProducts.length} {savedProducts.length === 1 ? 'item' : 'items'} saved for quick ordering with Cash on Delivery.
             </p>
           </div>
 
           <button
             onClick={() => navigate('shop')}
-            className="inline-flex items-center gap-2 text-xs font-bold text-[#E5E7EB] hover:text-[#3B82F6] transition-colors cursor-pointer"
+            className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-[#151C2C] hover:text-[#A98B52] transition-colors cursor-pointer"
           >
-            <span>Continue Shopping</span>
-            <ArrowRight className="w-4 h-4 text-[#3B82F6]" />
+            <span>Continue Exploring</span>
+            <ArrowRight className="w-4 h-4 text-[#A98B52]" />
           </button>
         </div>
 
         {savedProducts.length === 0 ? (
-          <div className="bg-[#111318] rounded-3xl p-16 text-center border border-[#2B3038] space-y-4 max-w-md mx-auto shadow-xl">
-            <div className="w-16 h-16 rounded-full bg-rose-950/40 text-rose-400 mx-auto flex items-center justify-center border border-rose-900">
-              <Heart className="w-8 h-8" />
+          <div className="bg-[#FCFBF8] rounded-2xl p-16 text-center border border-[#E5E0D5] space-y-5 max-w-md mx-auto shadow-sm">
+            <div className="w-16 h-16 rounded-full bg-[#F7F3EA] text-[#A98B52] mx-auto flex items-center justify-center border border-[#E5E0D5]">
+              <Heart className="w-7 h-7" />
             </div>
-            <h3 className="text-lg font-bold text-white">Your wishlist is empty</h3>
-            <p className="text-xs text-[#6B7280]">
-              Save equipment while browsing our solar, electrical, and hardware catalog to review anytime.
+            <h3 className="font-serif text-2xl font-bold text-[#0D0E10]">Your wishlist is empty</h3>
+            <p className="text-xs text-[#5A5D64] leading-relaxed">
+              Save architectural sanitaryware, solar energy systems, and appliances while browsing our collection to review anytime.
             </p>
             <button
               onClick={() => navigate('shop')}
-              className="bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-bold px-6 py-3 rounded-xl text-xs cursor-pointer transition-colors shadow-lg shadow-blue-500/20"
+              className="bg-[#151C2C] hover:bg-[#C9B27C] text-[#FCFBF8] hover:text-[#0D0E10] font-semibold uppercase tracking-[0.14em] px-7 py-3.5 rounded-lg text-xs cursor-pointer transition-colors shadow-sm"
             >
-              Explore Products
+              Explore Collection
             </button>
           </div>
         ) : (

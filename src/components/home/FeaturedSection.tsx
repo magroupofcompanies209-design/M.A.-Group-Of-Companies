@@ -4,13 +4,13 @@ import { ProductCard } from '../common/ProductCard';
 import { Flame, Sparkles, TrendingUp, Sun, ArrowRight } from 'lucide-react';
 
 export const FeaturedSection: React.FC = () => {
-  const { products, navigate } = useStore();
+  const { visibleProducts, navigate } = useStore();
   const [activeTab, setActiveTab] = useState<'new' | 'deals' | 'bestsellers' | 'solar'>('new');
 
   // Filter products based on active tab (only active storefront products, newest first)
-  const activeProducts = [...products]
-    .filter((p) => p.status !== 'archived' && p.status !== 'inactive' && !p.isArchived)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const activeProducts = [...visibleProducts].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
 
   let filtered = activeProducts;
   if (activeTab === 'deals') {
@@ -24,7 +24,6 @@ export const FeaturedSection: React.FC = () => {
         (p.categoryName && p.categoryName.toLowerCase().includes('solar'))
     );
   } else if (activeTab === 'new') {
-    // Show all active products sorted by newest created_at first so newly added Admin products appear immediately
     filtered = activeProducts;
   }
 
@@ -34,68 +33,68 @@ export const FeaturedSection: React.FC = () => {
   }
 
   return (
-    <section className="py-14 bg-[#0B0D10] border-b border-[#1A1D23]">
-      <div className="max-w-7xl mx-auto px-4">
+    <section className="py-16 sm:py-20 bg-[#FCFBF8] border-b border-[#B8B9BC]/30">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6">
         {/* Top Header & Interactive Segmented Filter Controls */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-10">
           <div>
-            <div className="text-xs font-bold text-[#3B82F6] uppercase tracking-widest mb-1 flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-[#2563EB]"></span>
-              Selected Wholesale &amp; Retail Offers
+            <div className="text-[11px] font-semibold text-[#A98B52] uppercase tracking-[0.22em] mb-2 flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#A98B52]"></span>
+              <span>Showroom Selection</span>
             </div>
-            <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-              Trending Equipment &amp; Deals
+            <h2 className="font-luxury-serif text-2xl sm:text-4xl font-semibold text-[#0D0E10] tracking-tight">
+              Signature Equipment &amp; Collections
             </h2>
           </div>
 
           {/* Segmented Control Buttons */}
-          <div className="flex items-center gap-1 p-1 bg-[#111318] border border-[#2B3038] rounded-xl shadow-xs overflow-x-auto max-w-full">
+          <div className="flex items-center gap-1.5 p-1.5 bg-[#F7F3EA] border border-[#B8B9BC]/40 rounded-xl overflow-x-auto max-w-full">
             <button
-              onClick={() => setActiveTab('deals')}
-              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
-                activeTab === 'deals'
-                  ? 'bg-[#2563EB] text-white shadow-sm'
-                  : 'text-[#6B7280] hover:text-white'
+              onClick={() => setActiveTab('new')}
+              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${
+                activeTab === 'new'
+                  ? 'bg-[#151C2C] text-[#FCFBF8] shadow-xs'
+                  : 'text-[#292B30]/75 hover:text-[#0D0E10]'
               }`}
             >
-              <Flame className="w-3.5 h-3.5 text-rose-400" />
-              <span>Today&apos;s Deals</span>
+              <Sparkles className="w-3.5 h-3.5 text-[#C9B27C]" />
+              <span>New Arrivals</span>
             </button>
 
             <button
               onClick={() => setActiveTab('bestsellers')}
-              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
+              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${
                 activeTab === 'bestsellers'
-                  ? 'bg-[#2563EB] text-white shadow-sm'
-                  : 'text-[#6B7280] hover:text-white'
+                  ? 'bg-[#151C2C] text-[#FCFBF8] shadow-xs'
+                  : 'text-[#292B30]/75 hover:text-[#0D0E10]'
               }`}
             >
-              <TrendingUp className="w-3.5 h-3.5 text-blue-400" />
-              <span>Best Sellers</span>
+              <TrendingUp className="w-3.5 h-3.5 text-[#C9B27C]" />
+              <span>Signature Pieces</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('deals')}
+              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${
+                activeTab === 'deals'
+                  ? 'bg-[#151C2C] text-[#FCFBF8] shadow-xs'
+                  : 'text-[#292B30]/75 hover:text-[#0D0E10]'
+              }`}
+            >
+              <Flame className="w-3.5 h-3.5 text-[#C9B27C]" />
+              <span>Privileged Offers</span>
             </button>
 
             <button
               onClick={() => setActiveTab('solar')}
-              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
+              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5 shrink-0 cursor-pointer ${
                 activeTab === 'solar'
-                  ? 'bg-[#2563EB] text-white shadow-sm'
-                  : 'text-[#6B7280] hover:text-white'
+                  ? 'bg-[#151C2C] text-[#FCFBF8] shadow-xs'
+                  : 'text-[#292B30]/75 hover:text-[#0D0E10]'
               }`}
             >
-              <Sun className="w-3.5 h-3.5 text-blue-300" />
+              <Sun className="w-3.5 h-3.5 text-[#C9B27C]" />
               <span>Solar Systems</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('new')}
-              className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer ${
-                activeTab === 'new'
-                  ? 'bg-[#2563EB] text-white shadow-sm'
-                  : 'text-[#6B7280] hover:text-white'
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-              <span>New Arrivals</span>
             </button>
           </div>
         </div>
@@ -108,13 +107,13 @@ export const FeaturedSection: React.FC = () => {
         </div>
 
         {/* Bottom CTA */}
-        <div className="mt-10 text-center">
+        <div className="mt-12 text-center">
           <button
             onClick={() => navigate('shop')}
-            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-[#111318] border border-[#2B3038] hover:border-[#2563EB] text-white text-xs font-bold shadow-xs hover:shadow-md transition-all cursor-pointer"
+            className="inline-flex items-center gap-2.5 px-7 py-3.5 rounded-lg bg-[#151C2C] hover:bg-[#C9B27C] text-[#FCFBF8] hover:text-[#0D0E10] text-xs font-semibold uppercase tracking-[0.14em] transition-all duration-300 shadow-sm cursor-pointer"
           >
-            <span>Explore Complete Store Catalog (PKR)</span>
-            <ArrowRight className="w-4 h-4 text-[#3B82F6]" />
+            <span>Explore Complete Showroom Catalog</span>
+            <ArrowRight className="w-4 h-4" />
           </button>
         </div>
       </div>

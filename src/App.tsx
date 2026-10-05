@@ -12,6 +12,10 @@ import { OrderSuccessPage } from './pages/OrderSuccessPage';
 import { TrackOrderPage } from './pages/TrackOrderPage';
 import { WishlistPage } from './pages/WishlistPage';
 import { B2BWholesalePage } from './pages/B2BWholesalePage';
+import { CartPage } from './pages/CartPage';
+import { CustomerAccountPage } from './pages/CustomerAccountPage';
+import { CompanyProfilePage } from './pages/CompanyProfilePage';
+import { BuildSolutionPage } from './pages/BuildSolutionPage';
 import {
   AboutUsPage,
   ContactUsPage,
@@ -33,10 +37,10 @@ const MainRouter: React.FC = () => {
     return (
       <React.Suspense
         fallback={
-          <div className="min-h-screen bg-neutral-950 flex flex-col items-center justify-center text-white">
-            <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
-            <p className="mt-4 text-xs tracking-widest text-neutral-400 uppercase font-mono">
-              Loading M.A. Group Admin Portal...
+          <div className="min-h-screen bg-[#0D0E10] flex flex-col items-center justify-center text-[#FCFBF8]">
+            <div className="w-10 h-10 border-2 border-[#C9B27C] border-t-transparent rounded-full animate-spin"></div>
+            <p className="mt-4 text-xs tracking-[0.2em] text-[#C9B27C] uppercase font-medium">
+              M.A. Group Executive Console...
             </p>
           </div>
         }
@@ -46,42 +50,57 @@ const MainRouter: React.FC = () => {
     );
   }
 
-  // Maintenance mode handling
-  if (settings?.maintenanceMode) {
+  // Storefront ON/OFF Maintenance Mode handling
+  const isStorefrontOff =
+    settings?.maintenanceMode === true || settings?.storefrontEnabled === false;
+
+  if (isStorefrontOff) {
     return (
-      <div className="min-h-screen bg-neutral-950 text-white flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 mb-6">
-          <Wrench className="w-8 h-8" />
+      <div className="min-h-screen bg-[#0D0E10] text-[#FCFBF8] flex flex-col items-center justify-center p-6 text-center relative overflow-hidden">
+        {/* Subtle luxury ambient glow */}
+        <div className="w-20 h-20 rounded-2xl bg-[#151C2C] border border-[#C9B27C]/45 flex items-center justify-center text-[#C9B27C] mb-6 shadow-2xl relative">
+          <Wrench className="w-8 h-8 animate-pulse" />
         </div>
-        <div className="flex items-center gap-3 mb-2">
-          <span className="font-extrabold text-white text-2xl uppercase tracking-tight">
-            M.A. Group of Companies
-          </span>
+
+        <div className="space-y-2 mb-6">
+          <div className="text-[11px] font-semibold text-[#C9B27C] tracking-[0.28em] uppercase">
+            M.A. GROUP OF COMPANIES
+          </div>
+          <h1 className="font-luxury-serif font-semibold text-[#FCFBF8] text-2xl sm:text-4xl tracking-wide">
+            We&apos;re Currently Working on Our Store
+          </h1>
+          <p className="text-[#C9B27C] font-medium text-sm sm:text-base tracking-wide pt-1">
+            Something exciting is coming soon.
+          </p>
         </div>
-        <p className="text-amber-500 font-semibold tracking-wider uppercase text-xs mb-4">
-          Under Scheduled Maintenance
-        </p>
-        <p className="max-w-md text-neutral-400 text-sm mb-8 leading-relaxed">
+
+        <p className="max-w-lg text-[#B8B9BC] text-xs sm:text-sm mb-8 leading-relaxed">
           {settings?.maintenanceMessage ||
-            'We are currently performing routine catalog and inventory synchronization to better serve our nationwide customers. Please check back shortly.'}
+            "We're currently performing maintenance and improvements. Please check back shortly."}
         </p>
+
+        {/* Professional Maintenance Progress Visual */}
+        <div className="w-64 h-1.5 bg-[#151C2C] rounded-full overflow-hidden border border-[#C9B27C]/30 mb-8">
+          <div className="w-2/3 h-full bg-[#C9B27C] rounded-full animate-pulse" />
+        </div>
+
         <div className="flex flex-col sm:flex-row items-center gap-4">
           {settings?.whatsappNumber && (
             <a
               href={`https://wa.me/${settings.whatsappNumber.replace(/[^0-9]/g, '')}`}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-colors"
+              className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-[#151C2C] hover:bg-[#C9B27C] text-[#FCFBF8] hover:text-[#0D0E10] border border-[#C9B27C]/40 font-semibold text-xs uppercase tracking-wider transition-all"
             >
               <MessageCircle className="w-4 h-4" />
-              <span>Contact via WhatsApp</span>
+              <span>Concierge via WhatsApp</span>
             </a>
           )}
           <button
             onClick={() => navigate('admin')}
-            className="text-xs text-neutral-500 hover:text-neutral-300 underline font-mono"
+            className="text-xs text-[#B8B9BC] hover:text-[#C9B27C] underline tracking-wider cursor-pointer"
           >
-            Staff / Administrator Access
+            Executive / Administrator Access
           </button>
         </div>
       </div>
@@ -98,6 +117,12 @@ const MainRouter: React.FC = () => {
         return <ShopPage />;
       case 'product':
         return <ProductDetailPage />;
+      case 'cart':
+        return <CartPage />;
+      case 'account':
+      case 'login':
+      case 'my-account':
+        return <CustomerAccountPage />;
       case 'checkout':
         return <CheckoutPage />;
       case 'order-success':
@@ -106,10 +131,17 @@ const MainRouter: React.FC = () => {
         return <TrackOrderPage />;
       case 'wishlist':
         return <WishlistPage />;
+      case 'b2b':
       case 'b2b-wholesale':
         return <B2BWholesalePage />;
+      case 'solutions':
+      case 'solution':
+      case 'build-solution':
+        return <BuildSolutionPage />;
+      case 'company':
+        return <CompanyProfilePage />;
       case 'about-us':
-        return <AboutUsPage />;
+        return <CompanyProfilePage />;
       case 'contact-us':
         return <ContactUsPage />;
       case 'shipping-policy':
@@ -127,7 +159,7 @@ const MainRouter: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-neutral-50 text-neutral-900 selection:bg-amber-500/20 selection:text-amber-900">
+    <div className="min-h-screen flex flex-col bg-[#F7F3EA] text-[#292B30] selection:bg-[#C9B27C]/30 selection:text-[#0D0E10]">
       {/* Public Header */}
       <Header />
 
@@ -141,31 +173,31 @@ const MainRouter: React.FC = () => {
       <AiChatWidget />
 
       {/* Toast Notifications */}
-      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-sm w-full">
+      <div className="fixed top-5 right-5 z-50 flex flex-col gap-2.5 pointer-events-none max-w-sm w-full">
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={`pointer-events-auto p-3.5 rounded-xl shadow-lg border text-xs font-semibold flex items-center justify-between gap-3 animate-in slide-in-from-top-2 duration-300 ${
+            className={`pointer-events-auto p-4 rounded-xl shadow-2xl border text-xs font-medium flex items-center justify-between gap-3 animate-in slide-in-from-top-2 duration-300 ${
               t.type === 'error'
-                ? 'bg-rose-900 text-white border-rose-800'
+                ? 'bg-[#0D0E10] text-[#FCFBF8] border-rose-500/50'
                 : t.type === 'info'
-                ? 'bg-neutral-900 text-neutral-100 border-neutral-800'
-                : 'bg-emerald-950 text-emerald-100 border-emerald-800'
+                ? 'bg-[#0D0E10] text-[#FCFBF8] border-[#C9B27C]/40'
+                : 'bg-[#0D0E10] text-[#FCFBF8] border-[#C9B27C]'
             }`}
           >
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2.5">
               {t.type === 'error' ? (
                 <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
               ) : t.type === 'info' ? (
-                <Info className="w-4 h-4 text-amber-400 shrink-0" />
+                <Info className="w-4 h-4 text-[#C9B27C] shrink-0" />
               ) : (
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <CheckCircle2 className="w-4 h-4 text-[#C9B27C] shrink-0" />
               )}
-              <span>{t.message}</span>
+              <span className="leading-snug">{t.message}</span>
             </div>
             <button
               onClick={() => removeToast(t.id)}
-              className="p-1 text-white/60 hover:text-white cursor-pointer"
+              className="p-1 text-[#B8B9BC] hover:text-[#FCFBF8] cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>

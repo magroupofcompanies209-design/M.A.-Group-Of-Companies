@@ -6,12 +6,9 @@ import {
   X,
   Send,
   Bot,
-  User,
   ExternalLink,
   ShoppingCart,
-  Minimize2,
   RefreshCw,
-  ArrowLeft,
 } from 'lucide-react';
 
 interface ChatMessage {
@@ -19,24 +16,76 @@ interface ChatMessage {
   sender: 'user' | 'assistant';
   text: string;
   timestamp: string;
-  recommendedProducts?: string[]; // IDs of products
+  recommendedProducts?: string[];
 }
 
+const DEFAULT_WELCOME_MESSAGE =
+  "Hello! I'm M.A. SMART ASSISTANT. How can I help you find the right product today?";
+
+const DEFAULT_TAGLINE = 'Your intelligent shopping assistant.';
+
+const DEFAULT_SUGGESTED_BUTTONS: { label: string; prompt: string }[] = [
+  {
+    label: 'Find a Product',
+    prompt: 'I want to find a product in the M.A. GROUP OF COMPANIES catalog.',
+  },
+  {
+    label: 'Compare Products',
+    prompt: 'Compare two products from your catalog with prices, specifications, and warranty.',
+  },
+  {
+    label: 'Find Products Under My Budget',
+    prompt: 'I need a solar inverter under PKR 350,000 or show me products by budget.',
+  },
+  {
+    label: 'Help Me Choose',
+    prompt: 'Help me choose the right solar, electrical, sanitary, kitchen, or EV product.',
+  },
+  {
+    label: 'Track My Order',
+    prompt: 'Help me check my order status and delivery information.',
+  },
+  {
+    label: 'Contact M.A. Group Of Companies',
+    prompt: 'How can I contact M.A. Group Of Companies or request a quotation?',
+  },
+];
+
 export const AiChatWidget: React.FC = () => {
-  const { isAiChatOpen, setIsAiChatOpen, products, addToCart, navigate, settings } = useStore();
+  const {
+    isAiChatOpen,
+    setIsAiChatOpen,
+    visibleProducts,
+    addToCart,
+    navigate,
+    settings,
+    customerAccount,
+  } = useStore();
+
+  const welcomeMessage = settings?.aiWelcomeMessage || DEFAULT_WELCOME_MESSAGE;
+  const tagline = settings?.aiTagline || DEFAULT_TAGLINE;
+
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
     {
       id: 'init',
       sender: 'assistant',
-      text:
-        settings?.aiWelcomeMessage ||
-        'Welcome to M.A. GROUP OF COMPANIES! I am your technical sales & sizing assistant. Ask me about solar system calculations, pure copper cables, sanitary fittings, gas hobs, or EV motorbikes delivered via Cash on Delivery (COD) across Pakistan.',
+      text: welcomeMessage,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Sync initial welcome message if Admin updates it in settings
+  useEffect(() => {
+    setMessages((prev) => {
+      if (prev.length === 1 && prev[0].id === 'init') {
+        return [{ ...prev[0], text: welcomeMessage }];
+      }
+      return prev;
+    });
+  }, [welcomeMessage]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -48,7 +97,6 @@ export const AiChatWidget: React.FC = () => {
     }
   }, [messages, isAiChatOpen]);
 
-  // Listen for custom trigger events from AiBanner or product pages
   useEffect(() => {
     const handleCustomPrompt = (e: any) => {
       const prompt = e.detail?.prompt;
@@ -58,7 +106,25 @@ export const AiChatWidget: React.FC = () => {
     };
     window.addEventListener('open-ai-prompt', handleCustomPrompt);
     return () => window.removeEventListener('open-ai-prompt', handleCustomPrompt);
-  }, []);
+  }, [visibleProducts, customerAccount]);
+
+  // If Admin disabled M.A. SMART ASSISTANT, do not render on storefront
+  if (settings && settings.aiAssistantEnabled === false) {
+    return null;
+  }
+
+  const suggestedButtons =
+    Array.isArray(settings?.aiSuggestedQuestions) && settings.aiSuggestedQuestions.length > 0
+      ? settings.aiSuggestedQuestions.map((q) => {
+          const match = DEFAULT_SUGGESTED_BUTTONS.find(
+            (b) => b.label.toLowerCase() === q.toLowerCase()
+          );
+          return {
+            label: q,
+            prompt: match ? match.prompt : q,
+          };
+        })
+      : DEFAULT_SUGGESTED_BUTTONS;
 
   const handleSendMessage = async (textToSend?: string) => {
     const query = (textToSend || input).trim();
@@ -84,27 +150,50 @@ export const AiChatWidget: React.FC = () => {
       const res = await fetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: query, history }),
+        body: JSON.stringify({
+          message: query,
+          history,
+          customerAccount: customerAccount
+            ? {
+                id: customerAccount.id,
+                email: customerAccount.email,
+                phone: customerAccount.phone,
+                fullName: customerAccount.fullName,
+              }
+            : null,
+        }),
       });
 
       const data = await safeJsonResponse(res, {
-        reply: "I'm here to help with all M.A. GROUP OF COMPANIES products across Pakistan. Please let me know your specifications!",
+        reply:
+          "Hello! I'm M.A. SMART ASSISTANT. Please let me know which product, category, or budget you are looking for.",
         recommendedProductIds: [] as string[],
       });
-      const replyText = data.reply || "I'm here to help with all M.A. GROUP OF COMPANIES products across Pakistan. Please let me know your specifications!";
+      const replyText =
+        data.reply ||
+        "Hello! I'm M.A. SMART ASSISTANT. Please let me know which product, category, or budget you are looking for.";
 
-      // Combine server-grounded recommendedProductIds with local SKU/brand matching
-      const serverRecIds: string[] = Array.isArray(data.recommendedProductIds) ? data.recommendedProductIds : [];
-      const matched = products.filter((p) => {
-        if (serverRecIds.includes(p.id)) return true;
-        const queryLower = query.toLowerCase();
-        const replyLower = replyText.toLowerCase();
-        return (
-          replyLower.includes(p.sku.toLowerCase()) ||
-          queryLower.includes(p.sku.toLowerCase()) ||
-          (replyLower.includes(p.brand.toLowerCase()) && replyLower.includes(p.categoryName.toLowerCase()))
-        );
-      }).slice(0, 3);
+      const serverRecIds: string[] = Array.isArray(data.recommendedProductIds)
+        ? data.recommendedProductIds
+        : [];
+      const maxRecs = Math.max(1, Math.min(6, Number(settings?.aiMaxRecommendations || 3)));
+
+      const matched =
+        settings?.aiAccessProductCatalog === false
+          ? []
+          : visibleProducts
+              .filter((p) => {
+                if (serverRecIds.includes(p.id)) return true;
+                const queryLower = query.toLowerCase();
+                const replyLower = replyText.toLowerCase();
+                return (
+                  replyLower.includes(p.sku.toLowerCase()) ||
+                  queryLower.includes(p.sku.toLowerCase()) ||
+                  (replyLower.includes(p.brand.toLowerCase()) &&
+                    replyLower.includes(p.categoryName.toLowerCase()))
+                );
+              })
+              .slice(0, maxRecs);
 
       const assistantMsg: ChatMessage = {
         id: 'bot-' + Date.now(),
@@ -121,7 +210,7 @@ export const AiChatWidget: React.FC = () => {
         {
           id: 'bot-err-' + Date.now(),
           sender: 'assistant',
-          text: 'Our technical support line is also available via WhatsApp for immediate sizing assistance. How else may I guide your project?',
+          text: 'M.A. SMART ASSISTANT is ready to help you explore our catalog, compare products, or check your order status. Please try your question again.',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
@@ -134,18 +223,18 @@ export const AiChatWidget: React.FC = () => {
     return (
       <button
         onClick={() => setIsAiChatOpen(true)}
-        className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 bg-[#111318] hover:bg-[#1A1D23] text-blue-400 border border-blue-500/40 px-4 py-3 rounded-full shadow-2xl transition-all hover:scale-105 cursor-pointer group"
+        className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-[#151C2C] hover:bg-[#0D0E10] text-[#FCFBF8] border border-[#C9B27C]/50 px-4.5 py-3 rounded-full shadow-2xl transition-all hover:scale-105 cursor-pointer group"
       >
         <div className="relative">
-          <Sparkles className="w-5 h-5 text-blue-400 animate-spin-slow" />
-          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-[#111318]"></span>
+          <Sparkles className="w-4 h-4 text-[#C9B27C]" />
+          <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-emerald-400"></span>
         </div>
         <div className="flex flex-col text-left">
-          <span className="text-[11px] font-black tracking-wider uppercase text-white leading-none">
-            M.A. Smart Assistant
+          <span className="text-[11px] font-semibold tracking-[0.12em] uppercase text-[#FCFBF8] leading-none">
+            M.A. SMART ASSISTANT
           </span>
-          <span className="text-[10px] text-blue-400 font-medium leading-tight">
-            Solar &middot; Cables &middot; Cash on Delivery
+          <span className="text-[9px] text-[#C9B27C] font-medium leading-tight mt-0.5">
+            {tagline}
           </span>
         </div>
       </button>
@@ -153,75 +242,57 @@ export const AiChatWidget: React.FC = () => {
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-full max-w-[390px] sm:max-w-[420px] h-[580px] bg-[#111318] text-white rounded-2xl shadow-2xl border border-[#1A1D23] flex flex-col overflow-hidden animate-in slide-in-from-bottom-4 duration-300">
+    <div className="fixed bottom-4 right-4 z-50 w-full max-w-[395px] sm:max-w-[430px] h-[600px] max-h-[85vh] bg-[#FCFBF8] text-[#292B30] rounded-2xl shadow-2xl border border-[#C9B27C]/45 flex flex-col overflow-hidden animate-in slide-in-from-bottom-4 duration-300">
       {/* Header */}
-      <div className="bg-[#0B0D10] text-white p-3.5 flex items-center justify-between border-b border-[#1A1D23] gap-2">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-8 h-8 rounded-xl bg-blue-500/20 border border-blue-500/40 flex items-center justify-center shrink-0">
-            <Bot className="w-4 h-4 text-blue-400" />
+      <div className="bg-[#0D0E10] text-[#FCFBF8] p-4 flex items-center justify-between border-b border-[#C9B27C]/25 gap-2">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-9 h-9 rounded-xl bg-[#151C2C] border border-[#C9B27C]/45 flex items-center justify-center shrink-0">
+            <Bot className="w-4 h-4 text-[#C9B27C]" />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="text-xs font-bold text-white uppercase tracking-wider truncate">
-                M.A. Smart Assistant
+              <span className="font-luxury-serif text-sm font-bold text-[#FCFBF8] tracking-wide truncate">
+                M.A. SMART ASSISTANT
               </span>
-              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
             </div>
-            <div className="text-[10px] text-[#6B7280] truncate">
-              Grounded in Official Catalog
+            <div className="text-[10px] text-[#C9B27C] tracking-wide truncate">
+              {tagline}
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            onClick={() => setIsAiChatOpen(false)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
-            title="Return back to website"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to App</span>
-          </button>
-          <button
-            onClick={() => setIsAiChatOpen(false)}
-            className="p-1.5 rounded-lg text-[#6B7280] hover:text-white hover:bg-[#1A1D23] transition-colors cursor-pointer"
-            title="Close Assistant"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        <button
+          onClick={() => setIsAiChatOpen(false)}
+          className="p-2 rounded-lg text-[#B8B9BC] hover:text-[#FCFBF8] hover:bg-white/10 transition-colors cursor-pointer"
+          title="Close M.A. SMART ASSISTANT"
+        >
+          <X className="w-4 h-4" />
+        </button>
       </div>
 
-      {/* Suggested Quick Questions Bar */}
-      <div className="bg-[#0B0D10]/80 p-2 border-b border-[#1A1D23] overflow-x-auto flex items-center gap-1.5 text-[11px]">
-        <button
-          onClick={() => handleSendMessage('Calculate solar setup for 1.5-ton AC in Pakistan')}
-          className="whitespace-nowrap px-2.5 py-1 bg-[#111318] hover:bg-[#1A1D23] border border-[#2B3038] rounded-md text-neutral-300 font-medium transition-colors"
-        >
-          Solar for 1.5T AC
-        </button>
-        <button
-          onClick={() => handleSendMessage('What is your Cash on Delivery policy?')}
-          className="whitespace-nowrap px-2.5 py-1 bg-[#111318] hover:bg-[#1A1D23] border border-[#2B3038] rounded-md text-neutral-300 font-medium transition-colors"
-        >
-          COD Policy
-        </button>
-        <button
-          onClick={() => handleSendMessage('Recommend heavy copper wire for home')}
-          className="whitespace-nowrap px-2.5 py-1 bg-[#111318] hover:bg-[#1A1D23] border border-[#2B3038] rounded-md text-neutral-300 font-medium transition-colors"
-        >
-          Pure Copper Cables
-        </button>
+      {/* Suggested Quick Buttons Bar */}
+      <div className="bg-[#F7F3EA] p-2.5 border-b border-[#B8B9BC]/35 overflow-x-auto flex items-center gap-1.5 text-[11px]">
+        {suggestedButtons.map((btn) => (
+          <button
+            key={btn.label}
+            type="button"
+            onClick={() => handleSendMessage(btn.prompt)}
+            className="whitespace-nowrap px-2.5 py-1.5 bg-[#FCFBF8] hover:bg-[#151C2C] hover:text-[#FCFBF8] hover:border-[#C9B27C] border border-[#B8B9BC]/45 rounded-lg text-[#151C2C] font-medium transition-colors cursor-pointer"
+          >
+            {btn.label}
+          </button>
+        ))}
       </div>
 
       {/* Messages Scroll Area */}
-      <div className="flex-1 p-4 overflow-y-auto space-y-4 bg-[#0B0D10]/40">
+      <div className="flex-1 p-4 overflow-y-auto space-y-4 bg-[#F7F3EA]/60">
         {messages.map((m) => (
           <div
             key={m.id}
             className={`flex flex-col ${m.sender === 'user' ? 'items-end' : 'items-start'}`}
           >
-            <div className="flex items-center gap-1 text-[10px] text-[#6B7280] mb-1 px-1">
+            <div className="flex items-center gap-1 text-[10px] text-[#292B30]/60 mb-1 px-1">
               {m.sender === 'user' ? (
                 <>
                   <span>You</span>
@@ -230,8 +301,8 @@ export const AiChatWidget: React.FC = () => {
                 </>
               ) : (
                 <>
-                  <Bot className="w-3 h-3 text-blue-400" />
-                  <span className="font-semibold text-neutral-300">M.A. Advisor</span>
+                  <Bot className="w-3 h-3 text-[#A98B52]" />
+                  <span className="font-semibold text-[#151C2C]">M.A. SMART ASSISTANT</span>
                   <span>&middot;</span>
                   <span>{m.timestamp}</span>
                 </>
@@ -239,34 +310,37 @@ export const AiChatWidget: React.FC = () => {
             </div>
 
             <div
-              className={`max-w-[85%] rounded-2xl p-3 text-xs leading-relaxed whitespace-pre-wrap ${
+              className={`max-w-[88%] rounded-2xl p-3.5 text-xs leading-relaxed whitespace-pre-wrap ${
                 m.sender === 'user'
-                  ? 'bg-blue-600 text-white rounded-tr-none'
-                  : 'bg-[#1A1D23] text-neutral-200 border border-[#2B3038] shadow-xs rounded-tl-none'
+                  ? 'bg-[#151C2C] text-[#FCFBF8] rounded-tr-none shadow-xs'
+                  : 'bg-[#FCFBF8] text-[#292B30] border border-[#B8B9BC]/35 shadow-xs rounded-tl-none'
               }`}
             >
               {m.text}
 
               {/* Matched Product Recommendations */}
               {m.recommendedProducts && m.recommendedProducts.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-[#2B3038] space-y-2">
-                  <div className="text-[11px] font-bold text-blue-400 uppercase tracking-wider">
-                    Recommended Catalog Products:
+                <div className="mt-3 pt-3 border-t border-[#B8B9BC]/30 space-y-2">
+                  <div className="text-[10px] font-bold text-[#A98B52] uppercase tracking-[0.14em]">
+                    Live Catalog Recommendations:
                   </div>
                   {m.recommendedProducts.map((pId) => {
-                    const prod = products.find((p) => p.id === pId);
+                    const prod = visibleProducts.find((p) => p.id === pId);
                     if (!prod) return null;
                     return (
                       <div
                         key={prod.id}
-                        className="p-2 rounded-lg bg-[#0B0D10] border border-[#2B3038] flex items-center justify-between gap-2"
+                        className="p-2.5 rounded-lg bg-[#F7F3EA] border border-[#B8B9BC]/35 flex items-center justify-between gap-2"
                       >
                         <div className="min-w-0">
-                          <div className="font-semibold text-white truncate">
+                          <div className="font-semibold text-[#0D0E10] truncate">
                             {prod.name}
                           </div>
-                          <div className="text-blue-400 font-bold">
-                            Rs. {(prod.salePrice || prod.price).toLocaleString()}
+                          <div className="text-[10px] text-[#292B30]/65 truncate">
+                            SKU: {prod.sku} &middot; {prod.stock > 0 ? 'In Stock' : 'Out of Stock'}
+                          </div>
+                          <div className="text-[#151C2C] font-bold mt-0.5 tabular-nums">
+                            PKR {(prod.salePrice || prod.price).toLocaleString()}
                           </div>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
@@ -275,18 +349,20 @@ export const AiChatWidget: React.FC = () => {
                               setIsAiChatOpen(false);
                               navigate('product', { id: prod.id });
                             }}
-                            className="p-1.5 rounded bg-[#1A1D23] hover:bg-[#2B3038] text-neutral-300 border border-[#2B3038]"
-                            title="View Product"
+                            className="p-1.5 rounded bg-[#FCFBF8] hover:border-[#C9B27C] text-[#151C2C] border border-[#B8B9BC]/40 cursor-pointer"
+                            title="View Product Details"
                           >
                             <ExternalLink className="w-3.5 h-3.5" />
                           </button>
-                          <button
-                            onClick={() => addToCart(prod, 1)}
-                            className="p-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white"
-                            title="Add to Cart (COD)"
-                          >
-                            <ShoppingCart className="w-3.5 h-3.5" />
-                          </button>
+                          {prod.stock > 0 && (
+                            <button
+                              onClick={() => addToCart(prod, 1)}
+                              className="p-1.5 rounded bg-[#151C2C] hover:bg-[#C9B27C] text-[#FCFBF8] hover:text-[#0D0E10] cursor-pointer"
+                              title="Add to Cart (COD)"
+                            >
+                              <ShoppingCart className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
@@ -298,9 +374,9 @@ export const AiChatWidget: React.FC = () => {
         ))}
 
         {loading && (
-          <div className="flex items-center gap-2 p-3 bg-[#1A1D23] border border-[#2B3038] rounded-2xl w-fit text-xs text-[#6B7280] shadow-xs">
-            <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-400" />
-            <span>Consulting engineering catalog &amp; specs...</span>
+          <div className="flex items-center gap-2 p-3 bg-[#FCFBF8] border border-[#B8B9BC]/35 rounded-2xl w-fit text-xs text-[#292B30]/75 shadow-xs">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#A98B52]" />
+            <span>M.A. SMART ASSISTANT is checking live catalog...</span>
           </div>
         )}
 
@@ -313,19 +389,19 @@ export const AiChatWidget: React.FC = () => {
           e.preventDefault();
           handleSendMessage();
         }}
-        className="p-3 bg-[#0B0D10] border-t border-[#1A1D23] flex items-center gap-2"
+        className="p-3 bg-[#FCFBF8] border-t border-[#B8B9BC]/35 flex items-center gap-2"
       >
         <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about solar, wire ratings, gas hobs, COD..."
-          className="flex-1 bg-[#111318] border border-[#2B3038] rounded-xl px-3.5 py-2 text-xs text-white placeholder-[#6B7280] focus:outline-none focus:border-blue-500"
+          placeholder="Ask M.A. SMART ASSISTANT about products, budget, or orders..."
+          className="flex-1 bg-[#F7F3EA] border border-[#B8B9BC]/40 rounded-lg px-3.5 py-2.5 text-xs text-[#0D0E10] placeholder-[#292B30]/50 focus:outline-none focus:border-[#C9B27C]"
         />
         <button
           type="submit"
           disabled={!input.trim() || loading}
-          className="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-40 transition-colors cursor-pointer shrink-0"
+          className="p-2.5 rounded-lg bg-[#151C2C] hover:bg-[#C9B27C] text-[#FCFBF8] hover:text-[#0D0E10] disabled:opacity-40 transition-colors cursor-pointer shrink-0"
         >
           <Send className="w-4 h-4" />
         </button>

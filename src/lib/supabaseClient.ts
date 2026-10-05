@@ -1,5 +1,23 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type { Product, Category, Order } from '../types/index';
+import type {
+  Product,
+  Category,
+  Brand,
+  Order,
+  StoreSettings,
+  CustomerAccount,
+  CompanyPage,
+  SmartOffer,
+  Coupon,
+  SolutionPackage,
+  B2BInquiry,
+  DeliveryZone,
+  DeliveryArea,
+  DeliverySettings,
+  WarrantyRegistration,
+  ServiceRequest,
+  SupportTicket,
+} from '../types/index';
 
 const supabaseUrl = (
   import.meta.env.VITE_SUPABASE_URL ||
@@ -221,6 +239,8 @@ export function mapProductToSupabaseRow(product: Product): Record<string, any> {
     brand: updatedProduct.brand,
     category: updatedProduct.categoryName || updatedProduct.categoryId,
     category_id: updatedProduct.categoryId,
+    subcategory_id: updatedProduct.subcategoryId || null,
+    subcategory_name: updatedProduct.subcategoryName || null,
     price: Number(updatedProduct.price || 0),
     discount_price: updatedProduct.salePrice !== undefined ? Number(updatedProduct.salePrice) : null,
     stock: Number(updatedProduct.stock ?? 0),
@@ -238,6 +258,7 @@ export function mapProductToSupabaseRow(product: Product): Record<string, any> {
     featured: Boolean(updatedProduct.isFeatured),
     is_featured: Boolean(updatedProduct.isFeatured),
     is_best_seller: Boolean(updatedProduct.isBestSeller),
+    is_new_arrival: Boolean(updatedProduct.isNewArrival),
     status: updatedProduct.status || 'active',
     data: updatedProduct,
     updated_at: new Date().toISOString(),
@@ -266,12 +287,32 @@ export function mapProductToCoreSupabaseRow(product: Product, includeId: boolean
 }
 
 export function mapSupabaseRowToCategory(row: any): Category {
-  if (row && row.slug && row.subcategories && !row.image_url && !row.data) {
-    return row as Category;
-  }
   const baseData: Partial<Category> = row.data && typeof row.data === 'object' ? row.data : {};
   const idStr = String(row.id || baseData.id || `cat-${Date.now()}`);
   const nameStr = row.name || baseData.name || 'Category';
+  const rawSubs = Array.isArray(row.subcategories)
+    ? row.subcategories
+    : Array.isArray(baseData.subcategories)
+    ? baseData.subcategories
+    : [];
+
+  const normalizedSubs = rawSubs
+    .map((sub: any, idx: number) => ({
+      id: String(sub.id || `sub-${idStr}-${idx + 1}`),
+      categoryId: String(sub.categoryId || idStr),
+      name: String(sub.name || 'Subcategory'),
+      slug:
+        sub.slug ||
+        String(sub.name || 'subcategory')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-'),
+      description: sub.description || '',
+      image: sub.image || '',
+      displayOrder: Number(sub.displayOrder ?? idx + 1),
+      isActive: sub.isActive !== false,
+    }))
+    .sort((a: any, b: any) => (a.displayOrder || 0) - (b.displayOrder || 0));
+
   return {
     ...baseData,
     id: idStr,
@@ -290,9 +331,7 @@ export function mapSupabaseRowToCategory(row: any): Category {
       row.is_active !== undefined && row.is_active !== null
         ? Boolean(row.is_active)
         : baseData.isActive ?? true,
-    subcategories: Array.isArray(row.subcategories)
-      ? row.subcategories
-      : baseData.subcategories || [],
+    subcategories: normalizedSubs,
   };
 }
 
@@ -308,6 +347,82 @@ export function mapCategoryToSupabaseRow(cat: Category): Record<string, any> {
     is_active: cat.isActive !== false,
     subcategories: cat.subcategories || [],
     data: cat,
+  };
+}
+
+export function mapSupabaseRowToPartner(row: any): Brand {
+  const baseData: Partial<Brand> = row.data && typeof row.data === 'object' ? row.data : {};
+  const idStr = String(row.id || baseData.id || `partner-${Date.now()}`);
+  const nameStr = row.name || baseData.name || 'Manufacturing Partner';
+  const logoStr = row.logo_url || row.logoUrl || baseData.logoUrl || baseData.logo_url || '';
+  const webStr = row.website_url || row.websiteUrl || baseData.websiteUrl || baseData.website_url || '';
+  const cats = Array.isArray(row.categories)
+    ? row.categories
+    : Array.isArray(baseData.categories)
+    ? baseData.categories
+    : [];
+
+  const isVis =
+    row.is_visible !== undefined && row.is_visible !== null
+      ? Boolean(row.is_visible)
+      : row.isVisible !== undefined && row.isVisible !== null
+      ? Boolean(row.isVisible)
+      : baseData.isVisible !== false;
+
+  return {
+    ...baseData,
+    id: idStr,
+    name: nameStr,
+    slug:
+      row.slug ||
+      baseData.slug ||
+      String(nameStr)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-'),
+    logoUrl: logoStr,
+    logo_url: logoStr,
+    description: row.description ?? baseData.description ?? '',
+    country: row.country || baseData.country || 'Pakistan',
+    websiteUrl: webStr,
+    website_url: webStr,
+    certification: row.certification || baseData.certification || 'ISO 9001 Certified Partner',
+    categories: cats,
+    partnerStatus: row.partner_status || row.partnerStatus || baseData.partnerStatus || 'Authorized Partner',
+    displayOrder: Number(row.display_order ?? row.displayOrder ?? baseData.displayOrder ?? 1),
+    isVisible: isVis,
+    isFeatured: row.is_featured !== undefined ? Boolean(row.is_featured) : Boolean(baseData.isFeatured ?? isVis),
+    createdAt: row.created_at || row.createdAt || baseData.createdAt || new Date().toISOString(),
+    updatedAt: row.updated_at || row.updatedAt || baseData.updatedAt || new Date().toISOString(),
+  };
+}
+
+export function mapPartnerToSupabaseRow(partner: Brand): Record<string, any> {
+  const logo = partner.logoUrl || partner.logo_url || '';
+  const web = partner.websiteUrl || partner.website_url || '';
+  const isVis = partner.isVisible !== false;
+  return {
+    id: partner.id,
+    name: partner.name,
+    slug: partner.slug || partner.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    logo_url: logo,
+    description: partner.description || '',
+    country: partner.country || 'Pakistan',
+    website_url: web,
+    certification: partner.certification || '',
+    categories: Array.isArray(partner.categories) ? partner.categories : [],
+    partner_status: partner.partnerStatus || 'Authorized Partner',
+    display_order: Number(partner.displayOrder ?? 1),
+    is_visible: isVis,
+    data: {
+      ...partner,
+      logoUrl: logo,
+      logo_url: logo,
+      websiteUrl: web,
+      website_url: web,
+      isVisible: isVis,
+    },
+    created_at: partner.createdAt || new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   };
 }
 
@@ -996,3 +1111,453 @@ export async function uploadImageDirectlyToSupabaseStorage(
     return { ok: false, error: err?.message || 'Direct storage upload failed' };
   }
 }
+
+export async function fetchSettingsFromSupabase(): Promise<Partial<StoreSettings> | null> {
+  if (supabase) {
+    try {
+      const cloudSettings = await readCloudTableFromSupabase<any>('store_settings');
+      if (cloudSettings && cloudSettings.length > 0) {
+        const first = cloudSettings.find((r: any) => r.id === 'default') || cloudSettings[0];
+        if (first) {
+          const { id, ...rest } = first;
+          return rest.data && typeof rest.data === 'object' ? rest.data : rest;
+        }
+      }
+      if (sqlTableAvailability['store_settings'] !== false) {
+        const { data, error } = await supabase.from('store_settings').select('*').limit(1);
+        if (!error && data && data.length > 0) {
+          sqlTableAvailability['store_settings'] = true;
+          const row = data[0];
+          const { id, ...rest } = row;
+          return rest.data && typeof rest.data === 'object' ? rest.data : rest;
+        } else if (error && isTableOrSchemaMissingError(error.message)) {
+          sqlTableAvailability['store_settings'] = false;
+        }
+      }
+    } catch {
+      // Ignore and fall back to API
+    }
+  }
+  return null;
+}
+
+export async function saveSettingsInSupabase(
+  settings: StoreSettings
+): Promise<{ ok: boolean; error?: string }> {
+  if (!supabase) return { ok: false, error: 'Supabase client not configured' };
+  try {
+    if (sqlTableAvailability['store_settings'] !== false) {
+      const { error } = await supabase
+        .from('store_settings')
+        .upsert({ id: 'default', data: settings }, { onConflict: 'id' });
+      if (error && isTableOrSchemaMissingError(error.message)) {
+        sqlTableAvailability['store_settings'] = false;
+      }
+    }
+    const cloudRes = await writeCloudTableToSupabase('store_settings', [{ id: 'default', ...settings }]);
+    return { ok: cloudRes.ok, error: cloudRes.error };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed saving store settings to Supabase' };
+  }
+}
+
+export async function fetchCustomerAccountsFromSupabase(): Promise<CustomerAccount[]> {
+  if (supabase) {
+    try {
+      const cloudCustomers = await readCloudTableFromSupabase<CustomerAccount>('customer_accounts');
+      if (cloudCustomers && Array.isArray(cloudCustomers)) {
+        return cloudCustomers;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return [];
+}
+
+export async function upsertCustomerAccountInSupabase(
+  account: CustomerAccount
+): Promise<{ ok: boolean; account?: CustomerAccount; error?: string }> {
+  try {
+    if (supabase) {
+      const list = (await readCloudTableFromSupabase<CustomerAccount>('customer_accounts')) || [];
+      const idx = list.findIndex(
+        (c) => c.id === account.id || c.email.toLowerCase() === account.email.toLowerCase()
+      );
+      if (idx > -1) {
+        list[idx] = { ...list[idx], ...account, updatedAt: new Date().toISOString() };
+      } else {
+        list.unshift({ ...account, updatedAt: new Date().toISOString() });
+      }
+      await writeCloudTableToSupabase('customer_accounts', list);
+    }
+    return { ok: true, account };
+  } catch (err: any) {
+    return { ok: false, error: err?.message };
+  }
+}
+
+export async function fetchPartnersFromSupabase(): Promise<Brand[] | null> {
+  let sqlPartners: Brand[] = [];
+  let cloudPartners: Brand[] = [];
+
+  if (supabase) {
+    try {
+      const cloudData = await readCloudTableFromSupabase<Brand>('manufacturing_partners');
+      if (cloudData && cloudData.length > 0) {
+        cloudPartners = cloudData.map(mapSupabaseRowToPartner);
+      }
+
+      if (sqlTableAvailability['manufacturing_partners'] !== false) {
+        const { data, error } = await supabase
+          .from('manufacturing_partners')
+          .select('*')
+          .order('display_order', { ascending: true });
+        if (!error && data) {
+          sqlTableAvailability['manufacturing_partners'] = true;
+          sqlPartners = data.map(mapSupabaseRowToPartner);
+        } else if (error && isTableOrSchemaMissingError(error.message)) {
+          sqlTableAvailability['manufacturing_partners'] = false;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  try {
+    const res = await fetch('/api/partners', { cache: 'no-store' });
+    if (res.ok) {
+      const apiData = await res.json();
+      if (Array.isArray(apiData) && apiData.length > 0) {
+        const mergedMap = new Map<string, Brand>();
+        apiData.forEach((p: Brand) => {
+          if (p && p.id) mergedMap.set(p.id, mapSupabaseRowToPartner(p));
+        });
+        cloudPartners.forEach((p) => mergedMap.set(p.id, p));
+        sqlPartners.forEach((p) => mergedMap.set(p.id, p));
+        return Array.from(mergedMap.values()).sort(
+          (a, b) => (a.displayOrder ?? 99) - (b.displayOrder ?? 99)
+        );
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  if (sqlPartners.length > 0 || cloudPartners.length > 0) {
+    const mergedMap = new Map<string, Brand>();
+    cloudPartners.forEach((p) => mergedMap.set(p.id, p));
+    sqlPartners.forEach((p) => mergedMap.set(p.id, p));
+    return Array.from(mergedMap.values()).sort(
+      (a, b) => (a.displayOrder ?? 99) - (b.displayOrder ?? 99)
+    );
+  }
+  return null;
+}
+
+export async function insertOrUpdatePartnerInSupabase(
+  partner: Brand,
+  currentPartners?: Brand[]
+): Promise<{ ok: boolean; partner?: Brand; error?: string }> {
+  if (!supabase) return { ok: false, error: 'Frontend Supabase client not configured' };
+  const normalized = mapSupabaseRowToPartner({
+    ...partner,
+    updatedAt: new Date().toISOString(),
+  });
+  try {
+    if (sqlTableAvailability['manufacturing_partners'] !== false) {
+      const row = mapPartnerToSupabaseRow(normalized);
+      const { data, error } = await supabase
+        .from('manufacturing_partners')
+        .upsert(row, { onConflict: 'id' })
+        .select('*')
+        .maybeSingle();
+      if (!error) {
+        sqlTableAvailability['manufacturing_partners'] = true;
+        const saved = data ? mapSupabaseRowToPartner(data) : normalized;
+        const list = (await readCloudTableFromSupabase<Brand>('manufacturing_partners')) || currentPartners || [];
+        const idx = list.findIndex((p) => p.id === saved.id);
+        if (idx > -1) list[idx] = saved;
+        else list.push(saved);
+        await writeCloudTableToSupabase('manufacturing_partners', list);
+        return { ok: true, partner: saved };
+      }
+      if (isTableOrSchemaMissingError(error.message)) {
+        sqlTableAvailability['manufacturing_partners'] = false;
+      }
+    }
+
+    const list = (await readCloudTableFromSupabase<Brand>('manufacturing_partners')) || currentPartners || [];
+    const idx = list.findIndex((p) => p.id === normalized.id);
+    if (idx > -1) list[idx] = normalized;
+    else list.push(normalized);
+    const cloudRes = await writeCloudTableToSupabase('manufacturing_partners', list);
+    if (cloudRes.ok) {
+      return { ok: true, partner: normalized };
+    }
+    return { ok: false, error: cloudRes.error };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to save partner in Supabase' };
+  }
+}
+
+export async function deletePartnerInSupabase(
+  id: string,
+  currentPartners?: Brand[]
+): Promise<{ ok: boolean; error?: string }> {
+  if (!supabase) return { ok: false, error: 'Frontend Supabase client not configured' };
+  try {
+    if (sqlTableAvailability['manufacturing_partners'] !== false) {
+      const { error } = await supabase.from('manufacturing_partners').delete().eq('id', id);
+      if (error && isTableOrSchemaMissingError(error.message)) {
+        sqlTableAvailability['manufacturing_partners'] = false;
+      } else if (error) {
+        return { ok: false, error: error.message };
+      }
+    }
+    const list = (await readCloudTableFromSupabase<Brand>('manufacturing_partners')) || currentPartners;
+    if (list) {
+      await writeCloudTableToSupabase(
+        'manufacturing_partners',
+        list.filter((p) => p.id !== id)
+      );
+    }
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Failed to delete partner' };
+  }
+}
+
+export async function fetchCollectionFromSupabase<T extends { id: string }>(
+  tableName: string,
+  apiEndpoint: string
+): Promise<T[] | null> {
+  let cloudItems: T[] = [];
+  let sqlItems: T[] = [];
+
+  if (supabase) {
+    try {
+      const cData = await readCloudTableFromSupabase<T>(tableName);
+      if (cData && Array.isArray(cData)) {
+        cloudItems = cData;
+      }
+      if (sqlTableAvailability[tableName] !== false) {
+        const { data, error } = await supabase.from(tableName).select('*');
+        if (!error && Array.isArray(data)) {
+          sqlTableAvailability[tableName] = true;
+          sqlItems = data.map((row: any) =>
+            row.data && typeof row.data === 'object' ? { ...row.data, id: row.id } : row
+          ) as T[];
+        } else if (error && isTableOrSchemaMissingError(error.message)) {
+          sqlTableAvailability[tableName] = false;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  try {
+    const res = await fetch(apiEndpoint, { cache: 'no-store' });
+    if (res.ok) {
+      const apiData = await res.json();
+      if (Array.isArray(apiData)) {
+        const merged = new Map<string, T>();
+        apiData.forEach((item: T) => {
+          if (item && item.id) merged.set(item.id, item);
+        });
+        cloudItems.forEach((item) => {
+          if (item && item.id) merged.set(item.id, item);
+        });
+        sqlItems.forEach((item) => {
+          if (item && item.id) merged.set(item.id, item);
+        });
+        return Array.from(merged.values());
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  if (cloudItems.length > 0 || sqlItems.length > 0) {
+    const merged = new Map<string, T>();
+    cloudItems.forEach((item) => {
+      if (item && item.id) merged.set(item.id, item);
+    });
+    sqlItems.forEach((item) => {
+      if (item && item.id) merged.set(item.id, item);
+    });
+    return Array.from(merged.values());
+  }
+  return null;
+}
+
+export async function upsertCollectionItemInSupabase<T extends { id: string }>(
+  tableName: string,
+  item: T,
+  currentList?: T[]
+): Promise<{ ok: boolean; item?: T; error?: string }> {
+  if (!supabase) return { ok: false, error: 'Supabase not configured' };
+  try {
+    if (sqlTableAvailability[tableName] !== false) {
+      const { error } = await supabase
+        .from(tableName)
+        .upsert({ id: item.id, data: item }, { onConflict: 'id' });
+      if (error && isTableOrSchemaMissingError(error.message)) {
+        sqlTableAvailability[tableName] = false;
+      }
+    }
+    const list = (await readCloudTableFromSupabase<T>(tableName)) || currentList || [];
+    const idx = list.findIndex((r) => r.id === item.id);
+    if (idx > -1) list[idx] = item;
+    else list.unshift(item);
+    const cloudRes = await writeCloudTableToSupabase(tableName, list);
+    return { ok: cloudRes.ok, item, error: cloudRes.error };
+  } catch (err: any) {
+    return { ok: false, error: err?.message };
+  }
+}
+
+export async function deleteCollectionItemInSupabase<T extends { id: string }>(
+  tableName: string,
+  id: string,
+  currentList?: T[]
+): Promise<{ ok: boolean; error?: string }> {
+  if (!supabase) return { ok: false, error: 'Supabase not configured' };
+  try {
+    if (sqlTableAvailability[tableName] !== false) {
+      await supabase.from(tableName).delete().eq('id', id);
+    }
+    const list = (await readCloudTableFromSupabase<T>(tableName)) || currentList || [];
+    const filtered = list.filter((r) => r.id !== id);
+    const cloudRes = await writeCloudTableToSupabase(tableName, filtered);
+    return { ok: cloudRes.ok, error: cloudRes.error };
+  } catch (err: any) {
+    return { ok: false, error: err?.message };
+  }
+}
+
+export const fetchCompanyPagesFromSupabase = () =>
+  fetchCollectionFromSupabase<CompanyPage>('company_pages', '/api/company-pages');
+
+export const upsertCompanyPageInSupabase = (page: CompanyPage, currentList?: CompanyPage[]) =>
+  upsertCollectionItemInSupabase<CompanyPage>('company_pages', page, currentList);
+
+export const deleteCompanyPageFromSupabase = (id: string, currentList?: CompanyPage[]) =>
+  deleteCollectionItemInSupabase<CompanyPage>('company_pages', id, currentList);
+
+export const fetchSmartOffersFromSupabase = () =>
+  fetchCollectionFromSupabase<SmartOffer>('smart_offers', '/api/smart-offers');
+
+export const upsertSmartOfferInSupabase = (offer: SmartOffer, currentList?: SmartOffer[]) =>
+  upsertCollectionItemInSupabase<SmartOffer>('smart_offers', offer, currentList);
+
+export const deleteSmartOfferFromSupabase = (id: string, currentList?: SmartOffer[]) =>
+  deleteCollectionItemInSupabase<SmartOffer>('smart_offers', id, currentList);
+
+export const fetchCouponsFromSupabase = () =>
+  fetchCollectionFromSupabase<Coupon>('coupons', '/api/coupons');
+
+export const upsertCouponInSupabase = (coupon: Coupon, currentList?: Coupon[]) =>
+  upsertCollectionItemInSupabase<Coupon>('coupons', coupon, currentList);
+
+export const deleteCouponFromSupabase = (id: string, currentList?: Coupon[]) =>
+  deleteCollectionItemInSupabase<Coupon>('coupons', id, currentList);
+
+export const fetchSolutionsFromSupabase = () =>
+  fetchCollectionFromSupabase<SolutionPackage>('solution_types', '/api/solutions');
+
+export const fetchSolutionPackagesFromSupabase = () =>
+  fetchCollectionFromSupabase<SolutionPackage>('solution_types', '/api/solutions');
+
+export const upsertSolutionPackageInSupabase = (
+  pkg: SolutionPackage,
+  currentList?: SolutionPackage[]
+) => upsertCollectionItemInSupabase<SolutionPackage>('solution_types', pkg, currentList);
+
+export const deleteSolutionPackageFromSupabase = (id: string, currentList?: SolutionPackage[]) =>
+  deleteCollectionItemInSupabase<SolutionPackage>('solution_types', id, currentList);
+
+export const fetchQuotationsFromSupabase = () =>
+  fetchCollectionFromSupabase<B2BInquiry>('quotation_requests', '/api/b2b');
+
+export const upsertQuotationRequestInSupabase = (
+  quote: B2BInquiry,
+  currentList?: B2BInquiry[]
+) => upsertCollectionItemInSupabase<B2BInquiry>('quotation_requests', quote, currentList);
+
+export const fetchDeliveryZonesFromSupabase = () =>
+  fetchCollectionFromSupabase<DeliveryZone>('delivery_zones', '/api/delivery/zones');
+
+export const upsertDeliveryZoneInSupabase = (
+  zone: DeliveryZone,
+  currentList?: DeliveryZone[]
+) => upsertCollectionItemInSupabase<DeliveryZone>('delivery_zones', zone, currentList);
+
+export const deleteDeliveryZoneFromSupabase = (id: string, currentList?: DeliveryZone[]) =>
+  deleteCollectionItemInSupabase<DeliveryZone>('delivery_zones', id, currentList);
+
+export const fetchDeliveryAreasFromSupabase = () =>
+  fetchCollectionFromSupabase<DeliveryArea>('delivery_areas', '/api/delivery/areas');
+
+export const upsertDeliveryAreaInSupabase = (
+  area: DeliveryArea,
+  currentList?: DeliveryArea[]
+) => upsertCollectionItemInSupabase<DeliveryArea>('delivery_areas', area, currentList);
+
+export const deleteDeliveryAreaFromSupabase = (id: string, currentList?: DeliveryArea[]) =>
+  deleteCollectionItemInSupabase<DeliveryArea>('delivery_areas', id, currentList);
+
+export async function fetchDeliverySettingsFromSupabase(): Promise<DeliverySettings | null> {
+  try {
+    const res = await fetch('/api/delivery/settings', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && typeof data === 'object') return data as DeliverySettings;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export async function saveDeliverySettingsInSupabase(
+  settings: DeliverySettings
+): Promise<{ ok: boolean; error?: string }> {
+  if (supabase) {
+    try {
+      await writeCloudTableToSupabase('delivery_settings', [{ id: 'default', ...settings }]);
+    } catch {
+      // ignore
+    }
+  }
+  return { ok: true };
+}
+
+export const fetchWarrantyRegistrationsFromSupabase = () =>
+  fetchCollectionFromSupabase<WarrantyRegistration>('warranty_registrations', '/api/warranty');
+
+export const upsertWarrantyRegistrationInSupabase = (
+  item: WarrantyRegistration,
+  currentList?: WarrantyRegistration[]
+) => upsertCollectionItemInSupabase<WarrantyRegistration>('warranty_registrations', item, currentList);
+
+export const fetchServiceRequestsFromSupabase = () =>
+  fetchCollectionFromSupabase<ServiceRequest>('service_requests', '/api/service-requests');
+
+export const upsertServiceRequestInSupabase = (
+  item: ServiceRequest,
+  currentList?: ServiceRequest[]
+) => upsertCollectionItemInSupabase<ServiceRequest>('service_requests', item, currentList);
+
+export const fetchSupportTicketsFromSupabase = () =>
+  fetchCollectionFromSupabase<SupportTicket>('support_tickets', '/api/support-tickets');
+
+export const upsertSupportTicketInSupabase = (
+  item: SupportTicket,
+  currentList?: SupportTicket[]
+) => upsertCollectionItemInSupabase<SupportTicket>('support_tickets', item, currentList);
+
+
+

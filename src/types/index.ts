@@ -38,6 +38,7 @@ export interface Product {
   videoUrl?: string;
   price: number; // in PKR
   salePrice?: number; // in PKR
+  discountPrice?: number; // in PKR
   costPrice?: number; // private product cost in PKR (Admins only)
   stock: number;
   reservedStock?: number;
@@ -46,9 +47,19 @@ export interface Product {
   unit?: string; // e.g. "piece", "meter", "set", "box"
   variants?: ProductVariant[];
   isArchived?: boolean;
+  isActive?: boolean;
+  isVisible?: boolean;
   weight?: string;
+  weightKg?: number;
+  weightUnit?: 'kg' | 'g';
   dimensions?: string;
   warranty: string;
+  deliveryRuleType?: 'standard' | 'free' | 'fixed' | 'surcharge' | 'unavailable' | 'quote_required';
+  deliveryFixedCharge?: number;
+  deliverySurcharge?: number;
+  installationAvailable?: boolean;
+  installationCharge?: number;
+  specialHandlingCharge?: number;
   tags: string[];
   status: ProductStatus;
   isFeatured?: boolean;
@@ -64,6 +75,18 @@ export interface Product {
   updatedAt: string;
 }
 
+export interface Subcategory {
+  id: string;
+  categoryId: string;
+  name: string;
+  slug: string;
+  description?: string;
+  image?: string;
+  displayOrder?: number;
+  isActive?: boolean;
+  isVisible?: boolean;
+}
+
 export interface Category {
   id: string;
   name: string;
@@ -73,15 +96,8 @@ export interface Category {
   iconName: string;
   displayOrder: number;
   isActive: boolean;
+  isVisible?: boolean;
   subcategories: Subcategory[];
-}
-
-export interface Subcategory {
-  id: string;
-  categoryId: string;
-  name: string;
-  slug: string;
-  description?: string;
 }
 
 export interface Brand {
@@ -89,9 +105,22 @@ export interface Brand {
   name: string;
   slug: string;
   logoUrl?: string;
+  logo_url?: string;
   description?: string;
+  country?: string;
+  websiteUrl?: string;
+  website_url?: string;
+  certification?: string;
+  categories?: string[];
+  partnerStatus?: string;
+  displayOrder?: number;
+  isVisible?: boolean;
   isFeatured: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
+
+export type ManufacturingPartner = Brand;
 
 export type OrderStatus =
   | 'Pending'
@@ -127,28 +156,102 @@ export interface OrderItem {
 }
 
 export interface CustomerAddress {
+  id?: string;
+  label?: string; // e.g. "Home", "Office", "Site"
   fullName: string;
   phone: string;
   whatsappNumber?: string;
   email?: string;
   addressLine: string;
+  areaId?: string;
+  areaName?: string;
+  zoneId?: string;
+  zoneName?: string;
+  city: string;
+  province: string;
+  country?: string;
+  postalCode?: string;
+  landmark?: string;
+  isDefault?: boolean;
+}
+
+export type DeliveryChargeMethod =
+  | 'fixed'
+  | 'percentage'
+  | 'weight_based'
+  | 'quantity_based'
+  | 'order_value_based';
+
+export type DeliveryShipmentStatus =
+  | 'Pending'
+  | 'Processing'
+  | 'Dispatched'
+  | 'In Transit'
+  | 'Out for Delivery'
+  | 'Delivered'
+  | 'Delivery Attempted'
+  | 'Failed Delivery'
+  | 'Returned'
+  | 'Cancelled';
+
+export interface DeliverySnapshot {
+  zoneId?: string;
+  zoneName: string;
+  areaId?: string;
+  areaName: string;
   city: string;
   province: string;
   postalCode?: string;
-  landmark?: string;
+  baseDeliveryCharge: number;
+  remoteAreaSurcharge: number;
+  heavyOversizedSurcharge: number;
+  productSpecificCharge: number;
+  installationCharge: number;
+  specialHandlingCharge: number;
+  finalDeliveryCharge: number;
+  ruleApplied: string;
+  chargeMethod: string;
+  freeDeliveryApplied: boolean;
+  freeDeliveryReason?: string;
+  codAvailable: boolean;
+  codBlockedReason?: string;
+  isRemoteArea: boolean;
+  quoteRequired?: boolean;
+  estimatedMinDays: number;
+  estimatedMaxDays: number;
+  estimatedDeliveryText: string;
+  totalWeightKg: number;
+  calculatedAt: string;
+}
+
+export interface DeliveryOverrideRecord {
+  previousCharge: number;
+  overrideCharge: number;
+  reason: string;
+  overriddenBy: string;
+  overriddenAt: string;
 }
 
 export interface Order {
   id: string;
-  orderNumber: string; // e.g. "MAG-8921"
+  orderNumber: string; // e.g. "MA-ORD-20261005-0001" or "MAG-8921"
   customerId?: string;
   customer: CustomerAddress;
   items: OrderItem[];
   subtotal: number;
   discount: number;
   shippingFee: number;
+  installationFee?: number;
+  remoteSurcharge?: number;
+  heavySurcharge?: number;
   grandTotal: number;
   status: OrderStatus;
+  deliveryStatus?: DeliveryShipmentStatus;
+  deliverySnapshot?: DeliverySnapshot;
+  deliveryOverride?: DeliveryOverrideRecord;
+  codVerified?: boolean;
+  codVerificationStatus?: 'Pending Verification' | 'Verified' | 'Flagged' | 'Rejected';
+  codVerificationNotes?: string;
   paymentMethod: 'Cash on Delivery';
   paymentStatus: PaymentStatus;
   couponCode?: string;
@@ -168,6 +271,19 @@ export interface Order {
   updatedAt: string;
 }
 
+export interface CustomerAccount {
+  id: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  savedAddresses: CustomerAddress[];
+  cart?: OrderItem[];
+  wishlist?: string[];
+  accountStatus: 'Active' | 'Disabled';
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface User {
   id: string;
   fullName: string;
@@ -175,6 +291,8 @@ export interface User {
   phone: string;
   role: 'customer' | 'admin' | 'superadmin';
   address?: CustomerAddress;
+  savedAddresses?: CustomerAddress[];
+  accountStatus?: 'Active' | 'Disabled';
   createdAt: string;
 }
 
@@ -214,11 +332,189 @@ export interface Coupon {
   discountValue: number;
   minOrderAmount?: number;
   maxDiscount?: number;
+  startDate?: string;
   expiresAt?: string;
   usageLimit?: number;
+  perCustomerLimit?: number;
+  applicableProductIds?: string[];
+  applicableCategoryIds?: string[];
   timesUsed: number;
   isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
+
+export type OfferType =
+  | 'Flash Sale'
+  | 'Percentage Discount'
+  | 'Fixed PKR Discount'
+  | 'Category Discount'
+  | 'Product Discount'
+  | 'Buy More Save More'
+  | 'Bundle Offer'
+  | 'Free Delivery'
+  | 'Limited-Time Offer'
+  | 'New Customer Offer'
+  | 'Seasonal Offer';
+
+export type SmartOfferType = OfferType;
+
+export interface SmartOffer {
+  id: string;
+  name: string;
+  shortDescription: string;
+  bannerImage: string;
+  offerType: OfferType;
+  discountPercentage?: number;
+  fixedDiscountAmount?: number;
+  minOrderValue?: number;
+  maxDiscount?: number;
+  startDate?: string;
+  endDate?: string;
+  applicableProductIds?: string[];
+  applicableCategoryIds?: string[];
+  applicableSubcategoryIds?: string[];
+  applicableProducts?: string[];
+  applicableCategories?: string[];
+  couponCode?: string;
+  badgeText?: string;
+  countdownTimerEnabled?: boolean;
+  showOnHomepage?: boolean;
+  displayPriority?: number;
+  priorityOrder?: number;
+  isVisible?: boolean;
+  isActive?: boolean;
+  ctaText?: string;
+  ctaLink?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CompanyPageSection {
+  id: string;
+  heading: string;
+  subheading?: string;
+  content: string;
+  imageUrl?: string;
+  image?: string;
+  buttonText?: string;
+  buttonLink?: string;
+  displayOrder: number;
+}
+
+export interface CompanyPageButton {
+  id: string;
+  text: string;
+  destination: string;
+  style?: 'primary' | 'secondary' | 'gold';
+}
+
+export interface CompanyPage {
+  id: string;
+  slug: string;
+  title: string;
+  subtitle: string;
+  heroImage?: string;
+  content: string;
+  sections: CompanyPageSection[];
+  buttons?: CompanyPageButton[];
+  buttonText?: string;
+  buttonLink?: string;
+  displayOrder: number;
+  isVisible: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HomepageCompanySection {
+  heading: string;
+  subheading?: string;
+  description: string;
+  imageUrl?: string;
+  image?: string;
+  buttonText: string;
+  buttonLink: string;
+  secondaryButtonText?: string;
+  secondaryButtonLink?: string;
+  highlights?: string[];
+  isVisible: boolean;
+  displayOrder: number;
+}
+
+export type SolutionType =
+  | 'Solar Solution'
+  | 'Electrical House Wiring Solution'
+  | 'Bathroom Sanitary Solution'
+  | 'Kitchen Appliance Solution'
+  | 'EV Charging Solution'
+  | 'Hardware & Tools Package'
+  | 'Commercial / Project Solution';
+
+export interface SolutionStep {
+  id: string;
+  title: string;
+  description?: string;
+  isRequired: boolean;
+  allowMultiple?: boolean;
+  productIds: string[];
+  displayOrder: number;
+}
+
+export interface SolutionPackage {
+  id: string;
+  slug: string;
+  title?: string;
+  name?: string;
+  subtitle?: string;
+  solutionType?: SolutionType;
+  targetPropertyType?: string;
+  propertySize?: string;
+  budgetTier?: 'Economy' | 'Standard' | 'Luxury';
+  description: string;
+  imageUrl?: string;
+  image?: string;
+  categoryTag?: string;
+  steps?: SolutionStep[];
+  recommendedProducts?: string[];
+  estimatedMinPrice?: number;
+  estimatedMaxPrice?: number;
+  packageDiscount?: number;
+  includesList?: string[];
+  specifications?: Record<string, string>;
+  installationCharge?: number;
+  deliveryCharge?: number;
+  solutionDiscount?: number; // fixed PKR discount or bundle savings
+  customServiceCharge?: number;
+  customServiceLabel?: string;
+  displayOrder: number;
+  isVisible: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CustomerSavedAddress = CustomerAddress;
+
+export interface QuotationLineItem {
+  productId: string;
+  productName: string;
+  sku: string;
+  productImage?: string;
+  stepTitle?: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+}
+
+export type QuoteLifecycleStatus =
+  | 'Requested'
+  | 'Under Review'
+  | 'Quotation Sent'
+  | 'Customer Confirmed'
+  | 'Processing'
+  | 'Completed'
+  | 'Rejected'
+  | 'Cancelled'
+  | 'Expired';
 
 export interface StoreSettings {
   storeName: string;
@@ -249,28 +545,83 @@ export interface StoreSettings {
   taxRate: number; // 0 for retail COD default
   lowStockThreshold?: number;
   cityShippingFees?: Record<string, number>;
+  storefrontEnabled?: boolean;
   maintenanceMode?: boolean;
   maintenanceMessage?: string;
+  requireLoginForCheckout?: boolean;
   warrantyPolicyText?: string;
   returnPolicyText?: string;
   termsConditionsText?: string;
   privacyPolicyText?: string;
   aiAssistantEnabled: boolean;
   aiWelcomeMessage: string;
+  aiTagline?: string;
+  aiSuggestedQuestions?: string[];
+  aiSystemInstructions?: string;
+  aiMaxRecommendations?: number;
+  aiAccessProductCatalog?: boolean;
+  aiAccessCustomerOrders?: boolean;
+  homepageCompanySection?: HomepageCompanySection;
 }
 
 export interface B2BInquiry {
   id: string;
+  quoteTrackingCode?: string; // e.g. MA-QT-20261005-0001
+  quote_tracking_code?: string;
+  quoteType?: 'b2b' | 'solution';
+  solutionId?: string;
+  solutionTitle?: string;
+  solutionType?: string;
+  propertyType?: string;
+  estimatedQuantity?: string;
+  productsRequired?: string;
+  notes?: string;
+  customerId?: string;
   companyName: string;
+  businessName?: string;
   contactPerson: string;
+  customerName?: string;
   phone: string;
   email: string;
-  city: string;
-  categoryInterest: string;
+  address?: string;
+  city?: string;
+  categoryInterest?: string;
   estimatedBudget?: string;
-  projectDetails: string;
-  status: 'new' | 'contacted' | 'quoted' | 'closed';
+  projectDetails?: string;
+  customerMessage?: string;
+  items?: QuotationLineItem[];
+  subtotal?: number;
+  discount?: number;
+  deliveryCharges?: number;
+  installationCharges?: number;
+  customServiceCharges?: number;
+  total?: number;
+  adminQuotationAmount?: number;
+  adminNotes?: string;
+  validUntil?: string;
+  termsAndConditions?: string;
+  paymentTerms?: string;
+  convertedOrderId?: string;
+  convertedOrderNumber?: string;
+  status:
+    | QuoteLifecycleStatus
+    | 'Submitted'
+    | 'Quotation Prepared'
+    | 'Sent to Customer'
+    | 'Approved'
+    | 'Closed'
+    | 'new'
+    | 'contacted'
+    | 'quoted'
+    | 'closed'
+    | 'New'
+    | 'Reviewing'
+    | 'Quoted'
+    | 'Accepted';
   createdAt: string;
+  updatedAt?: string;
+  quotedAt?: string;
+  confirmedAt?: string;
 }
 
 export type AdminRole = 'superadmin' | 'admin' | 'manager' | 'staff';
@@ -329,6 +680,7 @@ export interface InventoryLedgerEntry {
 export type CustomerSegment = 'New' | 'Returning' | 'Frequent' | 'High-Value' | 'Inactive';
 
 export interface CustomerProfile {
+  id?: string;
   phone: string;
   fullName: string;
   email?: string;
@@ -342,7 +694,213 @@ export interface CustomerProfile {
   averageOrderValue: number;
   firstOrderDate: string;
   lastOrderDate: string;
+  registrationDate?: string;
+  accountStatus?: 'Active' | 'Guest' | 'Disabled';
   segment: CustomerSegment;
   internalNotes?: string;
   riskScore: 'LOW RISK' | 'NORMAL' | 'REVIEW REQUIRED';
 }
+
+// ============================================================================
+// COMPLETE DELIVERY, AREAS & ZONES MANAGEMENT SYSTEM TYPES
+// ============================================================================
+
+export interface WeightBracket {
+  minKg: number;
+  maxKg: number;
+  charge: number;
+}
+
+export interface QuantityBracket {
+  minQty: number;
+  maxQty: number;
+  charge: number;
+}
+
+export interface OrderValueBracket {
+  minAmount: number;
+  maxAmount: number;
+  charge: number;
+}
+
+export interface DeliveryZone {
+  id: string;
+  name: string; // e.g. "Zone 1 — Lahore"
+  code: string; // e.g. "LHR-Z1"
+  description?: string;
+  province: string; // e.g. "Punjab"
+  baseCharge: number;
+  chargeType: DeliveryChargeMethod;
+  percentageRate?: number;
+  freeDeliveryThreshold?: number;
+  minDeliveryDays: number;
+  maxDeliveryDays: number;
+  codEnabled: boolean;
+  codMinAmount?: number;
+  codMaxAmount?: number;
+  installationBaseCharge?: number;
+  isActive: boolean;
+  displayOrder: number;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeliveryArea {
+  id: string;
+  zoneId: string;
+  zoneName?: string;
+  name: string; // e.g. "DHA Phase 1–8", "Gulberg", "Johar Town"
+  code: string; // e.g. "LHR-DHA"
+  city: string; // e.g. "Lahore"
+  province: string; // e.g. "Punjab"
+  postalCode?: string;
+  deliveryCharge?: number | null; // null/undefined falls back to zone charge
+  chargeType?: DeliveryChargeMethod;
+  freeDeliveryThreshold?: number | null;
+  minDeliveryDays?: number | null;
+  maxDeliveryDays?: number | null;
+  codEnabled: boolean;
+  codMinAmount?: number | null;
+  codMaxAmount?: number | null;
+  isRemoteArea: boolean;
+  remoteSurcharge: number;
+  installationCharge?: number | null;
+  isActive: boolean;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FreeDeliveryRule {
+  id: string;
+  name: string;
+  minOrderValue: number;
+  zoneIds?: string[];
+  areaIds?: string[];
+  productIds?: string[];
+  categoryIds?: string[];
+  startDate?: string;
+  endDate?: string;
+  isActive: boolean;
+}
+
+export interface DeliveryHoliday {
+  id: string;
+  name: string;
+  holidayDate: string; // YYYY-MM-DD
+  isActive: boolean;
+}
+
+export interface DeliverySettings {
+  defaultCharge: number;
+  defaultChargeType: DeliveryChargeMethod;
+  defaultMinDays: number;
+  defaultMaxDays: number;
+  defaultCodEnabled: boolean;
+  globalCodMinOrder: number;
+  globalCodMaxOrder: number;
+  globalFreeDeliveryThreshold: number;
+  enableGlobalFreeDelivery: boolean;
+  cutoffTime: string; // e.g. "16:00"
+  timezone: string; // e.g. "Asia/Karachi"
+  workingDays: {
+    Monday: boolean;
+    Tuesday: boolean;
+    Wednesday: boolean;
+    Thursday: boolean;
+    Friday: boolean;
+    Saturday: boolean;
+    Sunday: boolean;
+  };
+  holidays: DeliveryHoliday[];
+  weightBrackets: WeightBracket[];
+  quantityBrackets: QuantityBracket[];
+  orderValueBrackets: OrderValueBracket[];
+  heavyWeightThresholdKg: number;
+  heavyFixedSurcharge: number;
+  heavyPercentageSurcharge: number;
+  multiProductShipmentMode: 'combined' | 'highest_rule' | 'separate';
+  freeDeliveryRules: FreeDeliveryRule[];
+  updatedAt: string;
+}
+
+export type ServiceRequestType =
+  | 'Installation'
+  | 'Repair'
+  | 'Inspection'
+  | 'Maintenance'
+  | 'Warranty Service';
+
+export type ServiceRequestStatus =
+  | 'Submitted'
+  | 'Assigned'
+  | 'In Progress'
+  | 'Completed'
+  | 'Closed';
+
+export interface WarrantyRegistration {
+  id: string;
+  orderNumber: string;
+  productId?: string;
+  productName: string;
+  serialNumber: string;
+  purchaseDate: string;
+  warrantyPeriod: string;
+  customerName: string;
+  customerPhone: string;
+  customerEmail?: string;
+  city?: string;
+  status: 'Active' | 'Pending Verification' | 'Expired' | 'Claimed';
+  adminNotes?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface ServiceRequest {
+  id: string;
+  ticketNumber: string;
+  requestType: ServiceRequestType;
+  status: ServiceRequestStatus;
+  orderNumber?: string;
+  productName: string;
+  serialNumber?: string;
+  customerName: string;
+  customerPhone: string;
+  customerEmail?: string;
+  address: string;
+  city: string;
+  preferredDate?: string;
+  issueDescription: string;
+  assignedTechnician?: string;
+  adminNotes?: string;
+  resolutionSummary?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SupportTicket {
+  id: string;
+  ticketNumber: string;
+  inquiryType:
+    | 'Contact Form'
+    | 'Product Inquiry'
+    | 'Callback Request'
+    | 'Order Inquiry'
+    | 'Quote Inquiry'
+    | 'Service Request'
+    | 'General Support';
+  subject: string;
+  message: string;
+  customerName: string;
+  customerPhone: string;
+  customerEmail?: string;
+  orderOrQuoteRef?: string;
+  status: 'Open' | 'In Progress' | 'Replied' | 'Closed';
+  assignedTo?: string;
+  adminReply?: string;
+  internalNotes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+

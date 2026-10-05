@@ -17,7 +17,21 @@ import {
 } from './auth.ts';
 import { askShoppingAssistant, generateAdminCopy, generateProductDetailsWithAi, generateInvoiceAiSummary } from './gemini.ts';
 import { supabaseService } from './supabase.ts';
-import type { Order, OrderStatus, Product, ProductStatus, AdminRole } from '../src/types/index.ts';
+import type {
+  Order,
+  OrderStatus,
+  Product,
+  ProductStatus,
+  AdminRole,
+  Coupon,
+  B2BInquiry,
+  DeliveryZone,
+  DeliveryArea,
+  DeliverySettings,
+  WarrantyRegistration,
+  ServiceRequest,
+  SupportTicket,
+} from '../src/types/index.ts';
 
 dotenv.config();
 
@@ -382,7 +396,9 @@ app.get('/api/products', async (req: Request, res: Response) => {
 app.get('/api/products/:id', async (req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   await hydrateProductsFromSupabase();
-  const product = db.getProductById(req.params.id) || db.getProductBySlug(req.params.id);
+  const product =
+    db.getProductById(req.params.id) ||
+    db.getProducts().find((p) => p.slug === req.params.id);
   if (!product) {
     return res.status(404).json({ error: 'Product not found' });
   }
@@ -988,27 +1004,168 @@ app.post('/api/categories/:id/restore', requireRole(['superadmin', 'admin']), as
 });
 
 // ==========================================
-// 4. BRANDS API
+// 4. CERTIFIED MANUFACTURING PARTNERS & BRANDS API
 // ==========================================
 
-app.get('/api/brands', (_req: Request, res: Response) => {
-  return res.json(db.getBrands());
-});
+async function hydratePartnersFromSupabase() {
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaPartners = await supabaseService.getPartners(db.getBrands());
+      if (supaPartners !== null) {
+        if (supaPartners.length > 0) {
+          db.syncBrands(supaPartners);
+        } else if (db.getBrands().length > 0) {
+          // Seed initial partners into Supabase cloud storage if none exist yet
+          for (const b of db.getBrands()) {
+            await supabaseService.insertPartner(b, db.getBrands());
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Supabase partners fetch error:', err);
+    }
+  }
+  return db.getBrands();
+}
 
-app.post('/api/brands', requireAdminAuth, (req: Request, res: Response) => {
-  const newBrand = {
+const handleGetPartners = async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  const partners = await hydratePartnersFromSupabase();
+  return res.json(partners);
+};
+
+const handleCreatePartner = async (req: Request, res: Response) => {
+  if (!req.body.name || !String(req.body.name).trim()) {
+    return res.status(400).json({ error: 'Partner/Manufacturer name is required.' });
+  }
+  await hydratePartnersFromSupabase();
+
+  const logo = req.body.logoUrl || req.body.logo_url || '';
+  const web = req.body.websiteUrl || req.body.website_url || '';
+  const isVis =
+    req.body.isVisible !== undefined
+      ? Boolean(req.body.isVisible)
+      : req.body.is_visible !== undefined
+      ? Boolean(req.body.is_visible)
+      : true;
+
+  const newPartner = {
     ...req.body,
-    id: req.body.id || 'brand-' + Date.now(),
-    slug: req.body.slug || req.body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    id: req.body.id || 'partner-' + Date.now(),
+    name: String(req.body.name).trim(),
+    slug:
+      req.body.slug ||
+      String(req.body.name)
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-'),
+    logoUrl: logo,
+    logo_url: logo,
+    description: req.body.description || '',
+    country: req.body.country || 'Pakistan',
+    websiteUrl: web,
+    website_url: web,
+    certification: req.body.certification || '',
+    categories: Array.isArray(req.body.categories) ? req.body.categories : [],
+    partnerStatus: req.body.partnerStatus || 'Authorized Partner',
+    displayOrder: Number(req.body.displayOrder ?? db.getBrands().length + 1),
+    isVisible: isVis,
+    isFeatured: req.body.isFeatured !== undefined ? Boolean(req.body.isFeatured) : isVis,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
-  const created = db.createBrand(newBrand);
-  return res.status(201).json(created);
-});
 
-app.delete('/api/brands/:id', requireAdminAuth, (req: Request, res: Response) => {
-  const success = db.deleteBrand(req.params.id);
-  return res.json({ success });
-});
+  let created = db.createBrand(newPartner);
+  if (supabaseService.isConfigured()) {
+    const supaRes = await supabaseService.insertPartner(created, db.getBrands());
+    if (!supaRes.success && !supaRes.tableMissing) {
+      db.deleteBrand(created.id);
+      return res.status(500).json({ error: supaRes.error || 'Failed to save partner to Supabase.' });
+    }
+    if (supaRes.data) {
+      created = db.updateBrand(created.id, supaRes.data) || created;
+    }
+  }
+  db.logAction(
+    'CREATE_PARTNER',
+    (req as any).adminSession?.username || 'Admin',
+    `Added manufacturing partner: ${created.name}`
+  );
+  return res.status(201).json(created);
+};
+
+const handleUpdatePartner = async (req: Request, res: Response) => {
+  await hydratePartnersFromSupabase();
+  const id = req.params.id;
+  const existing = db.getBrandById(id);
+  if (!existing && !supabaseService.isConfigured()) {
+    return res.status(404).json({ error: 'Manufacturing partner not found.' });
+  }
+
+  const updates: Record<string, any> = { ...req.body };
+  if (updates.logoUrl !== undefined || updates.logo_url !== undefined) {
+    const l = updates.logoUrl ?? updates.logo_url ?? '';
+    updates.logoUrl = l;
+    updates.logo_url = l;
+  }
+  if (updates.websiteUrl !== undefined || updates.website_url !== undefined) {
+    const w = updates.websiteUrl ?? updates.website_url ?? '';
+    updates.websiteUrl = w;
+    updates.website_url = w;
+  }
+  if (updates.is_visible !== undefined && updates.isVisible === undefined) {
+    updates.isVisible = Boolean(updates.is_visible);
+  }
+
+  let updated = db.updateBrand(id, updates);
+  if (supabaseService.isConfigured()) {
+    const supaRes = await supabaseService.updatePartner(id, updates, updated || existing, db.getBrands());
+    if (!supaRes.success && !supaRes.tableMissing) {
+      return res.status(500).json({ error: supaRes.error || 'Failed to update partner in Supabase.' });
+    }
+    if (supaRes.data) {
+      updated = db.updateBrand(id, supaRes.data) || supaRes.data;
+    }
+  }
+  db.logAction(
+    'UPDATE_PARTNER',
+    (req as any).adminSession?.username || 'Admin',
+    `Updated manufacturing partner: ${updated?.name || id}`
+  );
+  return res.json(updated);
+};
+
+const handleDeletePartner = async (req: Request, res: Response) => {
+  await hydratePartnersFromSupabase();
+  const id = req.params.id;
+  const existing = db.getBrandById(id);
+
+  if (supabaseService.isConfigured()) {
+    const supaRes = await supabaseService.deletePartner(id, db.getBrands());
+    if (!supaRes.success && !supaRes.tableMissing) {
+      return res.status(500).json({ success: false, error: supaRes.error || 'Failed to delete partner from Supabase.' });
+    }
+  }
+
+  const success = db.deleteBrand(id);
+  db.logAction(
+    'DELETE_PARTNER',
+    (req as any).adminSession?.username || 'Admin',
+    `Deleted manufacturing partner: ${existing?.name || id}`
+  );
+  return res.json({ success: true, deletedId: id, wasFound: success || Boolean(existing) });
+};
+
+app.get('/api/partners', handleGetPartners);
+app.post('/api/partners', requireAdminAuth, handleCreatePartner);
+app.put('/api/partners/:id', requireAdminAuth, handleUpdatePartner);
+app.patch('/api/partners/:id/visibility', requireAdminAuth, handleUpdatePartner);
+app.delete('/api/partners/:id', requireAdminAuth, handleDeletePartner);
+
+app.get('/api/brands', handleGetPartners);
+app.post('/api/brands', requireAdminAuth, handleCreatePartner);
+app.put('/api/brands/:id', requireAdminAuth, handleUpdatePartner);
+app.delete('/api/brands/:id', requireAdminAuth, handleDeletePartner);
 
 // ==========================================
 // 5. ORDERS & CASH ON DELIVERY (COD) CHECKOUT
@@ -1098,8 +1255,33 @@ app.post('/api/orders', async (req: Request, res: Response) => {
   }
 
   const settings = db.getSettings();
+  if (settings.maintenanceMode === true || settings.storefrontEnabled === false) {
+    return res.status(503).json({
+      error: "We're currently performing maintenance and improvements. Please check back shortly.",
+    });
+  }
   if (!settings.codEnabled) {
     return res.status(400).json({ error: 'Cash on delivery is currently unavailable.' });
+  }
+
+  // Validate category and subcategory visibility for ordered items
+  const allCats = db.getCategories();
+  for (const item of items) {
+    const product = db.getProductById(item.productId);
+    if (product) {
+      const cat = allCats.find(
+        (c) => c.id === product.categoryId || c.name.toLowerCase() === (product.categoryName || '').toLowerCase()
+      );
+      if (cat && cat.isActive === false) {
+        return res.status(400).json({ error: `"${product.name}" is currently unavailable for purchase.` });
+      }
+      if (cat && product.subcategoryId) {
+        const sub = (cat.subcategories || []).find((s) => s.id === product.subcategoryId || s.slug === product.subcategoryId);
+        if (sub && sub.isActive === false) {
+          return res.status(400).json({ error: `"${product.name}" is currently unavailable for purchase.` });
+        }
+      }
+    }
   }
 
   // Idempotency Check: 1. By client-provided idempotency key or header
@@ -1135,9 +1317,30 @@ app.post('/api/orders', async (req: Request, res: Response) => {
     }
   }
 
-  // Shipping calculation
-  const shippingFee = subtotal >= settings.freeShippingThreshold ? 0 : settings.standardShippingFee;
-  const grandTotal = Math.max(0, subtotal - discount + shippingFee);
+  // Authoritative 5-Tier Priority Delivery Calculation & COD Verification
+  const deliverySnap = db.calculateDelivery({
+    city: customer.city,
+    province: customer.province,
+    areaId: customer.areaId || req.body.areaId,
+    areaName: customer.areaName || req.body.areaName,
+    zoneId: customer.zoneId || req.body.zoneId,
+    postalCode: customer.postalCode,
+    items,
+    subtotal,
+    requestInstallation: Boolean(req.body.requestInstallation),
+  });
+
+  if (!deliverySnap.codAvailable && !deliverySnap.quoteRequired) {
+    return res.status(400).json({
+      error:
+        deliverySnap.codBlockedReason ||
+        'Cash on Delivery is currently unavailable for the selected area.',
+    });
+  }
+
+  const shippingFee = deliverySnap.finalDeliveryCharge;
+  const installationFee = deliverySnap.installationCharge || 0;
+  const grandTotal = Math.max(0, subtotal - discount + shippingFee + installationFee);
 
   // Idempotency Check: 2. Prevent accidental rapid double-clicks
   const cleanPhone = customer.phone.replace(/[^0-9]/g, '');
@@ -1151,20 +1354,40 @@ app.post('/api/orders', async (req: Request, res: Response) => {
     return res.status(200).json(recentDuplicate);
   }
 
-  // Generate unique Order Number
+  // Generate unique Order Number (MA-ORD-YYYYMMDD-XXXX)
+  const nowDate = new Date();
+  const datePart = `${nowDate.getFullYear()}${String(nowDate.getMonth() + 1).padStart(2, '0')}${String(
+    nowDate.getDate()
+  ).padStart(2, '0')}`;
   const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-  const orderNumber = `MAG-${randomSuffix}`;
+  const orderNumber = `MA-ORD-${datePart}-${randomSuffix}`;
+
+  const enrichedCustomer = {
+    ...customer,
+    areaId: deliverySnap.areaId || customer.areaId,
+    areaName: deliverySnap.areaName || customer.areaName,
+    zoneId: deliverySnap.zoneId || customer.zoneId,
+    zoneName: deliverySnap.zoneName || customer.zoneName,
+  };
 
   const newOrder: Order = {
     id: 'ord-' + Date.now(),
     orderNumber,
-    customer,
+    customerId: req.body.customerId || undefined,
+    customer: enrichedCustomer,
     items,
     subtotal,
     discount,
     shippingFee,
+    installationFee,
+    remoteSurcharge: deliverySnap.remoteAreaSurcharge,
+    heavySurcharge: deliverySnap.heavyOversizedSurcharge,
     grandTotal,
     status: 'Pending',
+    deliveryStatus: 'Pending',
+    deliverySnapshot: deliverySnap,
+    codVerified: false,
+    codVerificationStatus: 'Pending Verification',
     paymentMethod: 'Cash on Delivery',
     paymentStatus: 'COD Pending',
     couponCode: validCoupon ? validCoupon.code : undefined,
@@ -1173,7 +1396,7 @@ app.post('/api/orders', async (req: Request, res: Response) => {
       {
         status: 'Pending',
         timestamp: new Date().toISOString(),
-        note: 'Order submitted with Cash on Delivery payment.',
+        note: `Order submitted via COD (${deliverySnap.ruleApplied}, Est. ${deliverySnap.estimatedDeliveryText}).`,
       },
     ],
     createdAt: new Date().toISOString(),
@@ -1288,6 +1511,28 @@ const handleAdminOrderUpdate = async (req: Request, res: Response) => {
   if (trackingNumber !== undefined) updates.trackingNumber = trackingNumber;
   if (courierName !== undefined) updates.courierName = courierName;
   if (internalNotes !== undefined) updates.internalNotes = internalNotes;
+  if (req.body.deliveryStatus !== undefined) updates.deliveryStatus = req.body.deliveryStatus;
+  if (req.body.codVerified !== undefined) updates.codVerified = Boolean(req.body.codVerified);
+  if (req.body.codVerificationStatus !== undefined) updates.codVerificationStatus = req.body.codVerificationStatus;
+  if (req.body.codVerificationNotes !== undefined) updates.codVerificationNotes = req.body.codVerificationNotes;
+  if (req.body.deliveryOverride && typeof req.body.deliveryOverride === 'object') {
+    const overrideAmt = Math.max(0, Number(req.body.deliveryOverride.overrideCharge) || 0);
+    updates.deliveryOverride = {
+      previousCharge: existingOrder.shippingFee,
+      overrideCharge: overrideAmt,
+      reason: req.body.deliveryOverride.reason || 'Admin Manual Override',
+      overriddenBy: (req as any).adminSession?.username || 'Admin',
+      overriddenAt: new Date().toISOString(),
+    };
+    updates.shippingFee = overrideAmt;
+    updates.grandTotal = Math.max(
+      0,
+      existingOrder.subtotal -
+        (existingOrder.discount || 0) +
+        overrideAmt +
+        (existingOrder.installationFee || 0)
+    );
+  }
   if (customer && typeof customer === 'object') {
     updates.customer = {
       ...existingOrder.customer,
@@ -1461,8 +1706,59 @@ app.post('/api/admin/inventory/adjust', requireRole(['superadmin', 'admin', 'man
 });
 
 // ==========================================
-// 5C. CUSTOMER MANAGEMENT & SEGMENTATION API
+// 5C. CUSTOMER MANAGEMENT, AUTH PROFILE SYNC & SEGMENTATION API
 // ==========================================
+
+// POST /api/customers/sync (Syncs authenticated Supabase customer profile without storing passwords)
+app.post('/api/customers/sync', async (req: Request, res: Response) => {
+  const { id, fullName, email, phone, savedAddresses, accountStatus, createdAt } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: 'Customer email is required.' });
+  }
+  const customerId = id || `cust-${email.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+  const userObj = db.upsertRegisteredCustomer({
+    id: customerId,
+    fullName: fullName || email.split('@')[0],
+    email,
+    phone: phone || '',
+    savedAddresses: Array.isArray(savedAddresses) ? savedAddresses : [],
+    accountStatus: accountStatus || 'Active',
+    createdAt: createdAt || new Date().toISOString(),
+  });
+  return res.json({ success: true, customer: userObj });
+});
+
+// GET /api/customers/orders (Retrieves orders strictly belonging to the logged-in customer)
+app.get('/api/customers/orders', async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  const { customerId, email, phone } = req.query;
+  if (!customerId && !email && !phone) {
+    return res.json([]);
+  }
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaOrders = await supabaseService.getOrders();
+      if (supaOrders) db.syncOrders(supaOrders);
+    } catch {
+      // ignore
+    }
+  }
+  const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  const cleanPhone = typeof phone === 'string' ? phone.replace(/[^0-9]/g, '') : '';
+  const cleanId = typeof customerId === 'string' ? customerId.trim() : '';
+
+  const myOrders = db.getOrders().filter((o) => {
+    if (cleanId && o.customerId && o.customerId === cleanId) return true;
+    if (cleanEmail && o.customer?.email && o.customer.email.trim().toLowerCase() === cleanEmail) return true;
+    if (cleanPhone && cleanPhone.length >= 7 && o.customer?.phone) {
+      const oPhone = o.customer.phone.replace(/[^0-9]/g, '');
+      if (oPhone && (oPhone.includes(cleanPhone) || cleanPhone.includes(oPhone))) return true;
+    }
+    return false;
+  });
+
+  return res.json(myOrders);
+});
 
 // GET /api/admin/customers
 app.get('/api/admin/customers', requireRole(['superadmin', 'admin', 'manager', 'staff']), async (_req: Request, res: Response) => {
@@ -1513,26 +1809,97 @@ app.delete('/api/banners/:id', requireAdminAuth, (req: Request, res: Response) =
 });
 
 // ==========================================
-// 7. COUPONS API
+// 7. COUPONS & SMART OFFERS API
 // ==========================================
 
-app.get('/api/coupons', requireAdminAuth, (_req: Request, res: Response) => {
-  return res.json(db.getCoupons());
+async function hydrateCouponsFromSupabase() {
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaCoupons = await supabaseService.getCoupons();
+      if (supaCoupons && supaCoupons.length > 0) {
+        db.syncCoupons(supaCoupons);
+      } else if (db.getCoupons().length > 0) {
+        for (const c of db.getCoupons()) {
+          await supabaseService.saveCoupon(c, db.getCoupons());
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return db.getCoupons();
+}
+
+app.get('/api/coupons', async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  const coupons = await hydrateCouponsFromSupabase();
+  return res.json(coupons);
 });
 
-app.post('/api/coupons/validate', (req: Request, res: Response) => {
-  const { code, cartSubtotal } = req.body;
+app.post('/api/coupons/validate', async (req: Request, res: Response) => {
+  await hydrateCouponsFromSupabase();
+  const { code, cartSubtotal, cartItems, customerEmail } = req.body;
   if (!code) return res.status(400).json({ valid: false, message: 'Please enter a coupon code' });
 
   const coupon = db.getCouponByCode(code);
-  if (!coupon) {
-    return res.status(404).json({ valid: false, message: 'Invalid or expired coupon code' });
+  if (!coupon || !coupon.isActive) {
+    return res.status(404).json({ valid: false, message: 'Invalid or disabled coupon code' });
+  }
+
+  const now = Date.now();
+  if (coupon.startDate && new Date(coupon.startDate).getTime() > now) {
+    return res.status(400).json({ valid: false, message: 'This coupon campaign has not started yet.' });
+  }
+  if (coupon.expiresAt && new Date(coupon.expiresAt).getTime() < now) {
+    return res.status(400).json({ valid: false, message: 'This coupon code has expired.' });
+  }
+  if (coupon.usageLimit && coupon.timesUsed >= coupon.usageLimit) {
+    return res.status(400).json({ valid: false, message: 'This coupon has reached its maximum usage limit.' });
+  }
+  if (coupon.perCustomerLimit && customerEmail) {
+    const usedByCustomer = db
+      .getOrders()
+      .filter(
+        (o) =>
+          o.status !== 'Cancelled' &&
+          o.couponCode?.toUpperCase() === coupon.code.toUpperCase() &&
+          o.customer?.email?.toLowerCase() === String(customerEmail).toLowerCase()
+      ).length;
+    if (usedByCustomer >= coupon.perCustomerLimit) {
+      return res.status(400).json({
+        valid: false,
+        message: `You have already used this coupon the maximum allowed times (${coupon.perCustomerLimit}).`,
+      });
+    }
+  }
+
+  // Check product/category eligibility if specified
+  if (
+    Array.isArray(cartItems) &&
+    cartItems.length > 0 &&
+    ((coupon.applicableProductIds && coupon.applicableProductIds.length > 0) ||
+      (coupon.applicableCategoryIds && coupon.applicableCategoryIds.length > 0))
+  ) {
+    const prodSet = new Set(coupon.applicableProductIds || []);
+    const catSet = new Set(coupon.applicableCategoryIds || []);
+    const hasEligibleItem = cartItems.some((item: any) => {
+      const p = db.getProductById(item.productId);
+      if (prodSet.has(item.productId)) return true;
+      if (p && catSet.has(p.categoryId)) return true;
+      return false;
+    });
+    if (!hasEligibleItem) {
+      return res.status(400).json({
+        valid: false,
+        message: 'This coupon is only valid for selected promotional products or categories.',
+      });
+    }
   }
 
   if (coupon.minOrderAmount && cartSubtotal < coupon.minOrderAmount) {
     return res.status(400).json({
       valid: false,
-      message: `Coupon requires a minimum order of Rs. ${coupon.minOrderAmount.toLocaleString()}`,
+      message: `Coupon requires a minimum order of PKR ${coupon.minOrderAmount.toLocaleString()}`,
     });
   }
 
@@ -1554,21 +1921,364 @@ app.post('/api/coupons/validate', (req: Request, res: Response) => {
   });
 });
 
-app.post('/api/coupons', requireAdminAuth, (req: Request, res: Response) => {
-  const newCoupon = {
+app.post('/api/coupons', requireAdminAuth, async (req: Request, res: Response) => {
+  await hydrateCouponsFromSupabase();
+  const newCoupon: Coupon = {
     ...req.body,
-    id: 'c-' + Date.now(),
-    code: req.body.code.toUpperCase().trim(),
-    timesUsed: 0,
-    isActive: true,
+    id: req.body.id || 'c-' + Date.now(),
+    code: String(req.body.code || '').toUpperCase().trim(),
+    description: req.body.description || 'Promotional Discount Coupon',
+    discountType: req.body.discountType === 'percentage' ? 'percentage' : 'fixed',
+    discountValue: Number(req.body.discountValue) || 0,
+    minOrderAmount: req.body.minOrderAmount ? Number(req.body.minOrderAmount) : 0,
+    maxDiscount: req.body.maxDiscount ? Number(req.body.maxDiscount) : undefined,
+    usageLimit: req.body.usageLimit ? Number(req.body.usageLimit) : undefined,
+    perCustomerLimit: req.body.perCustomerLimit ? Number(req.body.perCustomerLimit) : undefined,
+    startDate: req.body.startDate || undefined,
+    expiresAt: req.body.expiresAt || undefined,
+    applicableProductIds: Array.isArray(req.body.applicableProductIds) ? req.body.applicableProductIds : [],
+    applicableCategoryIds: Array.isArray(req.body.applicableCategoryIds) ? req.body.applicableCategoryIds : [],
+    timesUsed: Number(req.body.timesUsed) || 0,
+    isActive: req.body.isActive !== false,
+    createdAt: req.body.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   };
   const created = db.createCoupon(newCoupon);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveCoupon(created, db.getCoupons());
+  }
   return res.status(201).json(created);
 });
 
-app.delete('/api/coupons/:id', requireAdminAuth, (req: Request, res: Response) => {
+app.put('/api/coupons/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  await hydrateCouponsFromSupabase();
+  const updated = db.updateCoupon(req.params.id, {
+    ...req.body,
+    ...(req.body.code ? { code: String(req.body.code).toUpperCase().trim() } : {}),
+  });
+  if (!updated) return res.status(404).json({ error: 'Coupon not found' });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveCoupon(updated, db.getCoupons());
+  }
+  return res.json(updated);
+});
+
+app.delete('/api/coupons/:id', requireAdminAuth, async (req: Request, res: Response) => {
   const success = db.deleteCoupon(req.params.id);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.deleteCoupon(req.params.id, db.getCoupons());
+  }
   return res.json({ success });
+});
+
+// --- SMART OFFERS API ---
+async function hydrateSmartOffersFromSupabase() {
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaOffers = await supabaseService.getSmartOffers();
+      if (supaOffers && supaOffers.length > 0) {
+        db.syncSmartOffers(supaOffers);
+      } else if (db.getSmartOffers().length > 0) {
+        for (const o of db.getSmartOffers()) {
+          await supabaseService.saveSmartOffer(o, db.getSmartOffers());
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return db.getSmartOffers();
+}
+
+app.get('/api/smart-offers', async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  const offers = await hydrateSmartOffersFromSupabase();
+  return res.json(offers);
+});
+
+app.post('/api/smart-offers', requireAdminAuth, async (req: Request, res: Response) => {
+  await hydrateSmartOffersFromSupabase();
+  const offer = db.upsertSmartOffer({
+    ...req.body,
+    id: req.body.id || 'offer-' + Date.now(),
+    name: String(req.body.name || 'Special Promotion').trim(),
+    shortDescription: req.body.shortDescription || '',
+    bannerImage:
+      req.body.bannerImage ||
+      'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=1200&q=80',
+    offerType: req.body.offerType || 'Flash Sale',
+    discountPercentage: req.body.discountPercentage ? Number(req.body.discountPercentage) : undefined,
+    fixedDiscountAmount: req.body.fixedDiscountAmount ? Number(req.body.fixedDiscountAmount) : undefined,
+    minOrderValue: req.body.minOrderValue ? Number(req.body.minOrderValue) : undefined,
+    maxDiscount: req.body.maxDiscount ? Number(req.body.maxDiscount) : undefined,
+    startDate: req.body.startDate || new Date().toISOString(),
+    endDate: req.body.endDate || new Date(Date.now() + 30 * 86400000).toISOString(),
+    applicableProductIds: Array.isArray(req.body.applicableProductIds) ? req.body.applicableProductIds : [],
+    applicableCategoryIds: Array.isArray(req.body.applicableCategoryIds) ? req.body.applicableCategoryIds : [],
+    applicableSubcategoryIds: Array.isArray(req.body.applicableSubcategoryIds) ? req.body.applicableSubcategoryIds : [],
+    couponCode: req.body.couponCode ? String(req.body.couponCode).toUpperCase().trim() : undefined,
+    displayPriority: Number(req.body.displayPriority ?? 1),
+    isVisible: req.body.isVisible !== false,
+    createdAt: req.body.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveSmartOffer(offer, db.getSmartOffers());
+  }
+  db.logAction('UPSERT_SMART_OFFER', (req as any).adminSession?.username || 'Admin', `Saved Smart Offer: ${offer.name}`);
+  return res.status(201).json(offer);
+});
+
+app.put('/api/smart-offers/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  await hydrateSmartOffersFromSupabase();
+  const existing = db.getSmartOffers().find((o) => o.id === req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Smart offer not found' });
+  const updated = db.upsertSmartOffer({
+    ...existing,
+    ...req.body,
+    id: req.params.id,
+    updatedAt: new Date().toISOString(),
+  });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveSmartOffer(updated, db.getSmartOffers());
+  }
+  return res.json(updated);
+});
+
+app.delete('/api/smart-offers/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  const success = db.deleteSmartOffer(req.params.id);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.deleteSmartOffer(req.params.id, db.getSmartOffers());
+  }
+  return res.json({ success });
+});
+
+// ==========================================
+// 7B. COMPANY PROFILE PAGES API
+// ==========================================
+
+async function hydrateCompanyPagesFromSupabase() {
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaPages = await supabaseService.getCompanyPages();
+      if (supaPages && supaPages.length > 0) {
+        db.syncCompanyPages(supaPages);
+      } else if (db.getCompanyPages().length > 0) {
+        for (const p of db.getCompanyPages()) {
+          await supabaseService.saveCompanyPage(p, db.getCompanyPages());
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return db.getCompanyPages();
+}
+
+app.get('/api/company-pages', async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  const pages = await hydrateCompanyPagesFromSupabase();
+  return res.json(pages);
+});
+
+app.post('/api/company-pages', requireAdminAuth, async (req: Request, res: Response) => {
+  await hydrateCompanyPagesFromSupabase();
+  const title = String(req.body.title || 'Company Page').trim();
+  const slug =
+    req.body.slug ||
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+  const page = db.upsertCompanyPage({
+    id: req.body.id || 'page-' + Date.now(),
+    slug,
+    title,
+    subtitle: req.body.subtitle || '',
+    heroImage: req.body.heroImage || '',
+    content: req.body.content || '',
+    sections: Array.isArray(req.body.sections) ? req.body.sections : [],
+    buttons: Array.isArray(req.body.buttons) ? req.body.buttons : [],
+    displayOrder: Number(req.body.displayOrder ?? db.getCompanyPages().length + 1),
+    isVisible: req.body.isVisible !== false,
+    createdAt: req.body.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveCompanyPage(page, db.getCompanyPages());
+  }
+  db.logAction('UPSERT_COMPANY_PAGE', (req as any).adminSession?.username || 'Admin', `Saved company page: ${page.title}`);
+  return res.status(201).json(page);
+});
+
+app.put('/api/company-pages/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  await hydrateCompanyPagesFromSupabase();
+  const existing = db.getCompanyPages().find((p) => p.id === req.params.id || p.slug === req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Company page not found' });
+  const updated = db.upsertCompanyPage({
+    ...existing,
+    ...req.body,
+    id: existing.id,
+    updatedAt: new Date().toISOString(),
+  });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveCompanyPage(updated, db.getCompanyPages());
+  }
+  return res.json(updated);
+});
+
+app.delete('/api/company-pages/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  const success = db.deleteCompanyPage(req.params.id);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.deleteCompanyPage(req.params.id, db.getCompanyPages());
+  }
+  return res.json({ success });
+});
+
+// ==========================================
+// 7C. BUILD YOUR SOLUTION API
+// ==========================================
+
+async function hydrateSolutionsFromSupabase() {
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaSolutions = await supabaseService.getSolutions();
+      if (supaSolutions && supaSolutions.length > 0) {
+        db.syncSolutions(supaSolutions);
+      } else if (db.getSolutions().length > 0) {
+        for (const s of db.getSolutions()) {
+          await supabaseService.saveSolution(s, db.getSolutions());
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return db.getSolutions();
+}
+
+app.get('/api/solutions', async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  const solutions = await hydrateSolutionsFromSupabase();
+  return res.json(solutions);
+});
+
+app.post('/api/solutions', requireAdminAuth, async (req: Request, res: Response) => {
+  await hydrateSolutionsFromSupabase();
+  const title = String(req.body.title || 'Custom Solution Package').trim();
+  const slug =
+    req.body.slug ||
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+  const solution = db.upsertSolution({
+    id: req.body.id || 'sol-' + Date.now(),
+    slug,
+    title,
+    subtitle: req.body.subtitle || '',
+    description: req.body.description || '',
+    imageUrl:
+      req.body.imageUrl ||
+      'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=1200&q=80',
+    categoryTag: req.body.categoryTag || 'Complete Solution',
+    steps: Array.isArray(req.body.steps) ? req.body.steps : [],
+    installationCharge: Number(req.body.installationCharge || 0),
+    deliveryCharge: Number(req.body.deliveryCharge || 0),
+    solutionDiscount: Number(req.body.solutionDiscount || 0),
+    customServiceCharge: Number(req.body.customServiceCharge || 0),
+    customServiceLabel: req.body.customServiceLabel || '',
+    displayOrder: Number(req.body.displayOrder ?? db.getSolutions().length + 1),
+    isVisible: req.body.isVisible !== false,
+    createdAt: req.body.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveSolution(solution, db.getSolutions());
+  }
+  db.logAction('UPSERT_SOLUTION', (req as any).adminSession?.username || 'Admin', `Saved solution package: ${solution.title}`);
+  return res.status(201).json(solution);
+});
+
+app.put('/api/solutions/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  await hydrateSolutionsFromSupabase();
+  const existing = db.getSolutions().find((s) => s.id === req.params.id || s.slug === req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Solution package not found' });
+  const updated = db.upsertSolution({
+    ...existing,
+    ...req.body,
+    id: existing.id,
+    updatedAt: new Date().toISOString(),
+  });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveSolution(updated, db.getSolutions());
+  }
+  return res.json(updated);
+});
+
+app.delete('/api/solutions/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  const success = db.deleteSolution(req.params.id);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.deleteSolution(req.params.id, db.getSolutions());
+  }
+  return res.json({ success });
+});
+
+// Server-side Solution Pricing Validator
+app.post('/api/solutions/calculate', async (req: Request, res: Response) => {
+  await Promise.all([hydrateSolutionsFromSupabase(), hydrateProductsFromSupabase()]);
+  const { solutionId, selections } = req.body;
+  const solution = db.getSolutions().find((s) => s.id === solutionId || s.slug === solutionId);
+  if (!solution) {
+    return res.status(404).json({ error: 'Solution package not found.' });
+  }
+
+  const lineItems: any[] = [];
+  let productsSubtotal = 0;
+
+  if (Array.isArray(selections)) {
+    for (const sel of selections) {
+      const prod = db.getProductById(sel.productId);
+      if (prod && prod.status !== 'inactive' && !prod.isArchived) {
+        const qty = Math.max(1, Number(sel.quantity) || 1);
+        const unitPrice = prod.salePrice || prod.discountPrice || prod.price;
+        const total = unitPrice * qty;
+        productsSubtotal += total;
+        lineItems.push({
+          productId: prod.id,
+          productName: prod.name,
+          sku: prod.sku,
+          productImage: prod.images?.[0] || prod.imageUrl || '',
+          stepTitle: sel.stepTitle || '',
+          quantity: qty,
+          unitPrice,
+          total,
+        });
+      }
+    }
+  }
+
+  const installationCharge = Number(solution.installationCharge || 0);
+  const deliveryCharge = Number(solution.deliveryCharge || 0);
+  const customServiceCharge = Number(solution.customServiceCharge || 0);
+  const solutionDiscount = Number(solution.solutionDiscount || 0);
+  const estimatedTotal = Math.max(
+    0,
+    productsSubtotal + installationCharge + deliveryCharge + customServiceCharge - solutionDiscount
+  );
+
+  return res.json({
+    solutionId: solution.id,
+    solutionTitle: solution.title,
+    lineItems,
+    productsSubtotal,
+    installationCharge,
+    deliveryCharge,
+    customServiceCharge,
+    customServiceLabel: solution.customServiceLabel || 'Custom Engineering Service',
+    solutionDiscount,
+    estimatedTotal,
+  });
 });
 
 // ==========================================
@@ -1638,45 +2348,417 @@ app.put('/api/settings', requireRole(['superadmin', 'admin']), async (req: Reque
 });
 
 // ==========================================
-// 10. B2B / WHOLESALE INQUIRIES API
+// 10. B2B / WHOLESALE & SOLUTION QUOTATIONS API (WITH PERMANENT TRACKING CODE)
 // ==========================================
 
-app.post('/api/inquiries', (req: Request, res: Response) => {
-  const { companyName, contactPerson, phone, email, city, categoryInterest, estimatedBudget, projectDetails } = req.body;
-  if (!contactPerson || !phone || !projectDetails) {
-    return res.status(400).json({ error: 'Please provide contact person, phone number, and project details.' });
+async function hydrateQuotationsFromSupabase() {
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaQuotes = await supabaseService.getQuotations();
+      if (supaQuotes && supaQuotes.length > 0) {
+        db.syncInquiries(supaQuotes);
+      } else if (db.getInquiries().length > 0) {
+        for (const q of db.getInquiries()) {
+          await supabaseService.saveQuotation(q, db.getInquiries());
+        }
+      }
+    } catch {
+      // ignore
+    }
   }
+  return db.getInquiries();
+}
+
+app.post('/api/inquiries', async (req: Request, res: Response) => {
+  await Promise.all([hydrateQuotationsFromSupabase(), hydrateProductsFromSupabase()]);
+  const {
+    quoteType,
+    solutionId,
+    solutionTitle,
+    customerId,
+    companyName,
+    businessName,
+    contactPerson,
+    customerName,
+    phone,
+    email,
+    address,
+    city,
+    categoryInterest,
+    estimatedBudget,
+    projectDetails,
+    customerMessage,
+    items,
+    installationCharges,
+    deliveryCharges,
+    discount,
+  } = req.body;
+
+  const finalContact = contactPerson || customerName || '';
+  const finalDetails = projectDetails || customerMessage || solutionTitle || 'Commercial Quotation Request';
+  if (!finalContact || !phone) {
+    return res.status(400).json({ error: 'Please provide contact person name and phone number.' });
+  }
+
+  // Server-side authoritative tracking code generation (Never trust client tracking code)
+  const trackingCode = db.generateUniqueQuoteTrackingCode();
+
+  // Calculate authoritative product line items if provided
+  const validatedItems: any[] = [];
+  let calculatedSubtotal = 0;
+  if (Array.isArray(items)) {
+    for (const it of items) {
+      const prod = db.getProductById(it.productId);
+      const qty = Math.max(1, Number(it.quantity) || 1);
+      const unitPrice = prod
+        ? prod.salePrice || prod.discountPrice || prod.price
+        : Number(it.unitPrice || it.price || 0);
+      const lineTotal = unitPrice * qty;
+      calculatedSubtotal += lineTotal;
+      validatedItems.push({
+        productId: prod?.id || it.productId || 'custom',
+        productName: prod?.name || it.productName || 'Equipment Item',
+        sku: prod?.sku || it.sku || 'N/A',
+        productImage: prod?.images?.[0] || prod?.imageUrl || it.productImage || '',
+        stepTitle: it.stepTitle || '',
+        quantity: qty,
+        unitPrice,
+        total: lineTotal,
+      });
+    }
+  }
+
+  const inst = Number(installationCharges || 0);
+  const deliv = Number(deliveryCharges || 0);
+  const disc = Number(discount || 0);
+  const finalTotal = Math.max(0, calculatedSubtotal + inst + deliv - disc);
 
   const inquiry = db.createInquiry({
     id: 'inq-' + Date.now(),
-    companyName: companyName || 'Private Contracting Project',
-    contactPerson,
+    quoteTrackingCode: trackingCode,
+    quote_tracking_code: trackingCode,
+    quoteType: quoteType === 'solution' ? 'solution' : 'b2b',
+    solutionId,
+    solutionTitle,
+    customerId,
+    companyName: companyName || businessName || (quoteType === 'solution' ? 'Solution Package Client' : 'Private Contracting Project'),
+    businessName: businessName || companyName || 'Private Contracting Project',
+    contactPerson: finalContact,
+    customerName: finalContact,
     phone,
     email: email || '',
-    city: city || 'Pakistan',
-    categoryInterest: categoryInterest || 'General Electrical & Solar',
-    estimatedBudget,
-    projectDetails,
-    status: 'new',
+    address: address || '',
+    city: city || 'Lahore',
+    categoryInterest: categoryInterest || solutionTitle || 'General Electrical & Solar',
+    estimatedBudget: estimatedBudget || (finalTotal > 0 ? `PKR ${finalTotal.toLocaleString()}` : undefined),
+    projectDetails: finalDetails,
+    customerMessage: customerMessage || finalDetails,
+    items: validatedItems,
+    subtotal: calculatedSubtotal,
+    discount: disc,
+    deliveryCharges: deliv,
+    installationCharges: inst,
+    total: finalTotal,
+    status: 'Requested',
     createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   });
 
-  db.logAction('B2B_INQUIRY_RECEIVED', contactPerson, `New B2B quotation inquiry from ${city}`);
-  return res.status(201).json({ success: true, inquiryNumber: inquiry.id });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveQuotation(inquiry, db.getInquiries());
+  }
+
+  db.logAction(
+    'B2B_QUOTATION_CREATED',
+    finalContact,
+    `Created quotation ${inquiry.quoteTrackingCode} from ${inquiry.city}`
+  );
+
+  return res.status(201).json({
+    success: true,
+    inquiryNumber: inquiry.quoteTrackingCode,
+    quoteTrackingCode: inquiry.quoteTrackingCode,
+    quote: inquiry,
+  });
 });
 
-app.get('/api/inquiries', requireAdminAuth, (_req: Request, res: Response) => {
-  return res.json(db.getInquiries());
+// Public / Customer Track Quote by Tracking Code (Strips private adminNotes)
+app.get('/api/inquiries/track/:code', async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  await hydrateQuotationsFromSupabase();
+  const code = String(req.params.code || '').trim();
+  if (!code) {
+    return res.status(400).json({ error: 'Please enter a valid Quote Tracking Code.' });
+  }
+  const quote = db.getInquiryByIdOrCode(code);
+  if (!quote) {
+    return res.status(404).json({ error: `No quotation found with tracking code "${code.toUpperCase()}".` });
+  }
+  const { adminNotes, ...publicQuote } = quote;
+  return res.json(publicQuote);
+});
+
+// Customer My Quotes endpoint (returns quotes matching customerId, email, or phone without private adminNotes)
+app.get('/api/customers/quotes', async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  await hydrateQuotationsFromSupabase();
+  const { customerId, email, phone } = req.query;
+  if (!customerId && !email && !phone) {
+    return res.json([]);
+  }
+  const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  const cleanPhone = typeof phone === 'string' ? phone.replace(/[^0-9]/g, '') : '';
+  const cleanId = typeof customerId === 'string' ? customerId.trim() : '';
+
+  const matched = db
+    .getInquiries()
+    .filter((q) => {
+      if (cleanId && q.customerId && q.customerId === cleanId) return true;
+      if (cleanEmail && q.email && q.email.trim().toLowerCase() === cleanEmail) return true;
+      if (cleanPhone && cleanPhone.length >= 7 && q.phone) {
+        const qPhone = q.phone.replace(/[^0-9]/g, '');
+        if (qPhone && (qPhone.includes(cleanPhone) || cleanPhone.includes(qPhone))) return true;
+      }
+      return false;
+    })
+    .map(({ adminNotes, ...safeQuote }) => safeQuote);
+
+  return res.json(matched);
+});
+
+// Customer Confirm (Accept) or Reject Quotation — preserves tracking code permanently
+app.post('/api/inquiries/:code/respond', async (req: Request, res: Response) => {
+  await hydrateQuotationsFromSupabase();
+  const code = String(req.params.code || '').trim();
+  const { action, customerNote } = req.body; // action: 'accept' | 'reject'
+  const existing = db.getInquiryByIdOrCode(code);
+  if (!existing) {
+    return res.status(404).json({ error: 'Quotation not found.' });
+  }
+
+  const nextStatus = action === 'reject' ? 'Rejected' : 'Customer Confirmed';
+  const updated = db.updateInquiry(existing.id, {
+    status: nextStatus,
+    ...(action !== 'reject' ? { confirmedAt: new Date().toISOString() } : {}),
+    ...(customerNote ? { customerMessage: `${existing.customerMessage || ''}\n[Customer Response]: ${customerNote}`.trim() } : {}),
+  });
+
+  if (updated && supabaseService.isConfigured()) {
+    await supabaseService.saveQuotation(updated, db.getInquiries());
+  }
+
+  db.logAction(
+    action === 'reject' ? 'QUOTE_REJECTED_BY_CUSTOMER' : 'QUOTE_CONFIRMED_BY_CUSTOMER',
+    existing.contactPerson,
+    `Customer ${action === 'reject' ? 'rejected' : 'confirmed'} quote ${existing.quoteTrackingCode}`
+  );
+
+  const { adminNotes, ...safeUpdated } = updated || existing;
+  return res.json({
+    success: true,
+    message:
+      action === 'reject'
+        ? 'Quotation has been marked as Rejected.'
+        : 'Your quotation has been confirmed successfully.',
+    quote: safeUpdated,
+  });
+});
+
+app.get('/api/inquiries', requireAdminAuth, async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  const quotes = await hydrateQuotationsFromSupabase();
+  return res.json(quotes);
+});
+
+// Admin Update Quotation (Pricing, Items, Status, Notes) — NEVER changes quoteTrackingCode
+app.put('/api/inquiries/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  await hydrateQuotationsFromSupabase();
+  const existing = db.getInquiryByIdOrCode(req.params.id);
+  if (!existing) {
+    return res.status(404).json({ error: 'Quotation not found.' });
+  }
+
+  const updates: Partial<B2BInquiry> = { ...req.body };
+  delete (updates as any).quoteTrackingCode;
+  delete (updates as any).quote_tracking_code;
+
+  if (Array.isArray(updates.items)) {
+    const recalcItems = updates.items.map((it) => {
+      const qty = Math.max(1, Number(it.quantity) || 1);
+      const unitPrice = Number(it.unitPrice) || 0;
+      return {
+        ...it,
+        quantity: qty,
+        unitPrice,
+        total: qty * unitPrice,
+      };
+    });
+    const subtotal = recalcItems.reduce((sum, it) => sum + it.total, 0);
+    const discount = updates.discount !== undefined ? Number(updates.discount) : Number(existing.discount || 0);
+    const deliveryCharges =
+      updates.deliveryCharges !== undefined
+        ? Number(updates.deliveryCharges)
+        : Number(existing.deliveryCharges || 0);
+    const installationCharges =
+      updates.installationCharges !== undefined
+        ? Number(updates.installationCharges)
+        : Number(existing.installationCharges || 0);
+    const total = Math.max(0, subtotal + deliveryCharges + installationCharges - discount);
+
+    updates.items = recalcItems;
+    updates.subtotal = subtotal;
+    updates.discount = discount;
+    updates.deliveryCharges = deliveryCharges;
+    updates.installationCharges = installationCharges;
+    updates.total = total;
+    updates.adminQuotationAmount = total;
+  }
+
+  if (updates.status === 'Quotation Sent' || updates.status === 'Quoted') {
+    updates.quotedAt = new Date().toISOString();
+  }
+  if (updates.status === 'Customer Confirmed' && !existing.confirmedAt) {
+    updates.confirmedAt = new Date().toISOString();
+  }
+
+  const updated = db.updateInquiry(existing.id, updates);
+  if (updated && supabaseService.isConfigured()) {
+    await supabaseService.saveQuotation(updated, db.getInquiries());
+  }
+
+  db.logAction(
+    'UPDATE_QUOTATION',
+    (req as any).adminSession?.username || 'Admin',
+    `Updated quotation ${existing.quoteTrackingCode} (Status: ${updated?.status})`
+  );
+
+  return res.json(updated);
+});
+
+// Admin Convert Confirmed Quote to Order — Keeps original Quote ID & Quote Tracking Code
+app.post('/api/inquiries/:id/convert-to-order', requireAdminAuth, async (req: Request, res: Response) => {
+  await Promise.all([hydrateQuotationsFromSupabase(), hydrateProductsFromSupabase()]);
+  const quote = db.getInquiryByIdOrCode(req.params.id);
+  if (!quote) {
+    return res.status(404).json({ error: 'Quotation not found.' });
+  }
+
+  if (quote.convertedOrderNumber) {
+    return res.status(400).json({
+      error: `This quotation is already linked to Order #${quote.convertedOrderNumber}.`,
+    });
+  }
+
+  const now = new Date();
+  const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(
+    now.getDate()
+  ).padStart(2, '0')}`;
+  const orderSeq = String(db.getOrders().length + 1).padStart(4, '0');
+  const orderNumber = `MA-ORD-${dateStr}-${orderSeq}`;
+
+  const orderItems =
+    Array.isArray(quote.items) && quote.items.length > 0
+      ? quote.items.map((it) => ({
+          productId: it.productId,
+          productName: it.productName,
+          productImage:
+            it.productImage ||
+            'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=400&q=80',
+          sku: it.sku || 'B2B-ITEM',
+          price: it.unitPrice,
+          quantity: it.quantity,
+          total: it.total,
+        }))
+      : [
+          {
+            productId: 'b2b-custom',
+            productName: `${quote.companyName} — ${quote.categoryInterest}`,
+            productImage:
+              'https://images.unsplash.com/photo-1509391365360-2e959784a276?auto=format&fit=crop&w=400&q=80',
+            sku: quote.quoteTrackingCode || 'B2B-QUOTE',
+            price: Number(quote.total || quote.adminQuotationAmount || 0),
+            quantity: 1,
+            total: Number(quote.total || quote.adminQuotationAmount || 0),
+          },
+        ];
+
+  const subtotal = Number(quote.subtotal || orderItems.reduce((s, i) => s + i.total, 0));
+  const discount = Number(quote.discount || 0);
+  const shippingFee = Number(quote.deliveryCharges || 0) + Number(quote.installationCharges || 0);
+  const grandTotal = Math.max(0, subtotal - discount + shippingFee);
+
+  const newOrder: Order = {
+    id: 'ord-' + Date.now(),
+    orderNumber,
+    customerId: quote.customerId,
+    customer: {
+      fullName: quote.contactPerson || quote.customerName || quote.companyName,
+      phone: quote.phone,
+      email: quote.email || undefined,
+      addressLine: quote.address || `${quote.companyName}, ${quote.city}`,
+      city: quote.city || 'Lahore',
+      province: 'Punjab',
+    },
+    items: orderItems,
+    subtotal,
+    discount,
+    shippingFee,
+    grandTotal,
+    status: 'Confirmed',
+    paymentMethod: 'Cash on Delivery',
+    paymentStatus: 'COD Pending',
+    customerNotes: `Converted from B2B Quotation ${quote.quoteTrackingCode}. ${quote.customerMessage || ''}`.trim(),
+    internalNotes: `Source Quote Tracking Code: ${quote.quoteTrackingCode} (Quote ID: ${quote.id})`,
+    timeline: [
+      {
+        status: 'Confirmed',
+        timestamp: new Date().toISOString(),
+        note: `Created from confirmed B2B Quotation ${quote.quoteTrackingCode}`,
+      },
+    ],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const createdOrder = db.createOrder(newOrder);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.insertOrder(createdOrder, db.getOrders());
+  }
+
+  const updatedQuote = db.updateInquiry(quote.id, {
+    status: 'Processing',
+    convertedOrderId: createdOrder.id,
+    convertedOrderNumber: createdOrder.orderNumber,
+  });
+  if (updatedQuote && supabaseService.isConfigured()) {
+    await supabaseService.saveQuotation(updatedQuote, db.getInquiries());
+  }
+
+  db.logAction(
+    'CONVERT_QUOTE_TO_ORDER',
+    (req as any).adminSession?.username || 'Admin',
+    `Converted Quote ${quote.quoteTrackingCode} → Order ${createdOrder.orderNumber}`
+  );
+
+  return res.status(201).json({
+    success: true,
+    quote: updatedQuote,
+    order: createdOrder,
+  });
 });
 
 // DELETE /api/inquiries/:id (Admin Protected)
-app.delete('/api/inquiries/:id', requireAdminAuth, (req: Request, res: Response) => {
+app.delete('/api/inquiries/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  const existing = db.getInquiryByIdOrCode(req.params.id);
   const success = db.deleteInquiry(req.params.id);
   if (!success) {
     return res.status(404).json({ error: 'Inquiry not found' });
   }
-  db.logAction('DELETE_INQUIRY', (req as any).adminSession.username, `Deleted quotation inquiry: ${req.params.id}`);
-  return res.json({ success: true, message: 'Inquiry deleted successfully.' });
+  if (supabaseService.isConfigured() && existing) {
+    await supabaseService.deleteQuotation(existing.id, db.getInquiries());
+  }
+  db.logAction('DELETE_INQUIRY', (req as any).adminSession.username, `Deleted quotation inquiry: ${existing?.quoteTrackingCode || req.params.id}`);
+  return res.json({ success: true, message: 'Quotation deleted successfully.' });
 });
 
 // ==========================================
@@ -1729,9 +2811,20 @@ app.get('/api/admin/analytics', requireAdminAuth, async (_req: Request, res: Res
   });
 });
 
-app.get('/api/admin/analytics/advanced', requireRole(['superadmin', 'admin', 'manager']), (req: Request, res: Response) => {
+app.get('/api/admin/analytics/advanced', requireRole(['superadmin', 'admin', 'manager']), async (req: Request, res: Response) => {
+  await hydrateProductsFromSupabase();
+  if (supabaseService.isConfigured()) {
+    try {
+      const supaOrders = await supabaseService.getOrders();
+      if (supaOrders !== null) db.syncOrders(supaOrders);
+    } catch {
+      // ignore
+    }
+  }
   const range = (req.query.range as string) || 'month';
-  const analytics = db.getAdvancedAnalytics(range);
+  const startDate = req.query.startDate as string | undefined;
+  const endDate = req.query.endDate as string | undefined;
+  const analytics = db.getAdvancedAnalytics(range, startDate, endDate);
   return res.json(analytics);
 });
 
@@ -1740,18 +2833,559 @@ app.get('/api/admin/audit-logs', requireAdminAuth, (_req: Request, res: Response
 });
 
 // ==========================================
+// 11B. COMPLETE DELIVERY, AREAS & ZONES API
+// ==========================================
+
+async function hydrateDeliveryFromSupabase() {
+  if (supabaseService.isConfigured()) {
+    try {
+      const [sZones, sAreas, sSettings] = await Promise.all([
+        supabaseService.getDeliveryZones(),
+        supabaseService.getDeliveryAreas(),
+        supabaseService.getDeliverySettings(),
+      ]);
+      if (sZones && sZones.length > 0) {
+        db.syncDeliveryZones(sZones);
+      } else {
+        for (const z of db.getDeliveryZones()) {
+          await supabaseService.saveDeliveryZone(z, db.getDeliveryZones());
+        }
+      }
+      if (sAreas && sAreas.length > 0) {
+        db.syncDeliveryAreas(sAreas);
+      } else {
+        for (const a of db.getDeliveryAreas()) {
+          await supabaseService.saveDeliveryArea(a, db.getDeliveryAreas());
+        }
+      }
+      if (sSettings) {
+        db.updateDeliverySettings(sSettings);
+      } else {
+        await supabaseService.saveDeliverySettings(db.getDeliverySettings());
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
+
+app.get('/api/delivery/zones', async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  await hydrateDeliveryFromSupabase();
+  return res.json(db.getDeliveryZones());
+});
+
+app.post('/api/delivery/zones', requireAdminAuth, async (req: Request, res: Response) => {
+  const now = new Date().toISOString();
+  const zone: DeliveryZone = {
+    id: req.body.id || 'zone-' + Date.now(),
+    name: (req.body.name || 'New Delivery Zone').trim(),
+    code: (req.body.code || 'ZN-' + Date.now().toString().slice(-3)).trim().toUpperCase(),
+    description: req.body.description || '',
+    province: req.body.province || 'Punjab',
+    baseCharge: Number(req.body.baseCharge ?? 350),
+    chargeType: req.body.chargeType || 'fixed',
+    percentageRate: Number(req.body.percentageRate ?? 2),
+    freeDeliveryThreshold:
+      req.body.freeDeliveryThreshold !== undefined && req.body.freeDeliveryThreshold !== ''
+        ? Number(req.body.freeDeliveryThreshold)
+        : undefined,
+    minDeliveryDays: Number(req.body.minDeliveryDays ?? 2),
+    maxDeliveryDays: Number(req.body.maxDeliveryDays ?? 5),
+    codEnabled: req.body.codEnabled !== false,
+    codMinAmount: Number(req.body.codMinAmount ?? 500),
+    codMaxAmount: Number(req.body.codMaxAmount ?? 400000),
+    installationBaseCharge: Number(req.body.installationBaseCharge ?? 2000),
+    isActive: req.body.isActive !== false,
+    displayOrder: Number(req.body.displayOrder ?? db.getDeliveryZones().length + 1),
+    notes: req.body.notes || '',
+    createdAt: req.body.createdAt || now,
+    updatedAt: now,
+  };
+  const saved = db.upsertDeliveryZone(zone);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveDeliveryZone(saved, db.getDeliveryZones());
+  }
+  db.logAction(
+    'DELIVERY_ZONE_SAVED',
+    (req as any).adminSession?.username || 'Admin',
+    `Saved delivery zone: ${saved.name} (Base Charge: Rs. ${saved.baseCharge})`
+  );
+  return res.status(201).json(saved);
+});
+
+app.put('/api/delivery/zones/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  const existing = db.getDeliveryZones().find((z) => z.id === req.params.id);
+  if (!existing) {
+    return res.status(404).json({ error: 'Delivery zone not found' });
+  }
+  const updated = db.upsertDeliveryZone({
+    ...existing,
+    ...req.body,
+    id: existing.id,
+    updatedAt: new Date().toISOString(),
+  });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveDeliveryZone(updated, db.getDeliveryZones());
+  }
+  db.logAction(
+    'DELIVERY_ZONE_UPDATED',
+    (req as any).adminSession?.username || 'Admin',
+    `Updated delivery zone: ${updated.name} (Base Charge: Rs. ${updated.baseCharge}, Active: ${updated.isActive})`
+  );
+  return res.json(updated);
+});
+
+app.delete('/api/delivery/zones/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  const existing = db.getDeliveryZones().find((z) => z.id === req.params.id);
+  const ok = db.deleteDeliveryZone(req.params.id);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.deleteDeliveryZone(req.params.id, db.getDeliveryZones());
+  }
+  if (existing) {
+    db.logAction(
+      'DELIVERY_ZONE_DELETED',
+      (req as any).adminSession?.username || 'Admin',
+      `Deleted delivery zone: ${existing.name}`
+    );
+  }
+  return res.json({ success: ok });
+});
+
+app.get('/api/delivery/areas', async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  await hydrateDeliveryFromSupabase();
+  return res.json(db.getDeliveryAreas());
+});
+
+app.post('/api/delivery/areas', requireAdminAuth, async (req: Request, res: Response) => {
+  const now = new Date().toISOString();
+  const area: DeliveryArea = {
+    id: req.body.id || 'area-' + Date.now() + '-' + Math.random().toString(36).slice(2, 5),
+    zoneId: req.body.zoneId || 'zone-lahore',
+    name: (req.body.name || 'New Delivery Area').trim(),
+    code: (req.body.code || 'AR-' + Date.now().toString().slice(-3)).trim().toUpperCase(),
+    city: (req.body.city || 'Lahore').trim(),
+    province: (req.body.province || 'Punjab').trim(),
+    postalCode: req.body.postalCode || '',
+    deliveryCharge:
+      req.body.deliveryCharge !== undefined &&
+      req.body.deliveryCharge !== null &&
+      req.body.deliveryCharge !== ''
+        ? Number(req.body.deliveryCharge)
+        : null,
+    chargeType: req.body.chargeType || 'fixed',
+    freeDeliveryThreshold:
+      req.body.freeDeliveryThreshold !== undefined &&
+      req.body.freeDeliveryThreshold !== null &&
+      req.body.freeDeliveryThreshold !== ''
+        ? Number(req.body.freeDeliveryThreshold)
+        : null,
+    minDeliveryDays:
+      req.body.minDeliveryDays !== undefined && req.body.minDeliveryDays !== ''
+        ? Number(req.body.minDeliveryDays)
+        : null,
+    maxDeliveryDays:
+      req.body.maxDeliveryDays !== undefined && req.body.maxDeliveryDays !== ''
+        ? Number(req.body.maxDeliveryDays)
+        : null,
+    codEnabled: req.body.codEnabled !== false,
+    codMinAmount:
+      req.body.codMinAmount !== undefined && req.body.codMinAmount !== ''
+        ? Number(req.body.codMinAmount)
+        : null,
+    codMaxAmount:
+      req.body.codMaxAmount !== undefined && req.body.codMaxAmount !== ''
+        ? Number(req.body.codMaxAmount)
+        : null,
+    isRemoteArea: Boolean(req.body.isRemoteArea),
+    remoteSurcharge: Number(req.body.remoteSurcharge || 0),
+    installationCharge:
+      req.body.installationCharge !== undefined && req.body.installationCharge !== ''
+        ? Number(req.body.installationCharge)
+        : null,
+    isActive: req.body.isActive !== false,
+    notes: req.body.notes || '',
+    createdAt: req.body.createdAt || now,
+    updatedAt: now,
+  };
+  const saved = db.upsertDeliveryArea(area);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveDeliveryArea(saved, db.getDeliveryAreas());
+  }
+  db.logAction(
+    'DELIVERY_AREA_SAVED',
+    (req as any).adminSession?.username || 'Admin',
+    `Saved delivery area: ${saved.name} (${saved.city}) in ${saved.zoneName}`
+  );
+  return res.status(201).json(saved);
+});
+
+app.post('/api/delivery/areas/bulk', requireAdminAuth, async (req: Request, res: Response) => {
+  const { areas } = req.body;
+  if (!Array.isArray(areas) || areas.length === 0) {
+    return res.status(400).json({ error: 'Areas array is required for bulk operation' });
+  }
+  const now = new Date().toISOString();
+  const savedList: DeliveryArea[] = [];
+  for (const raw of areas) {
+    const item: DeliveryArea = {
+      id: raw.id || 'area-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+      zoneId: raw.zoneId || 'zone-lahore',
+      name: (raw.name || 'Area').trim(),
+      code: (raw.code || 'AR-' + Math.floor(100 + Math.random() * 900)).trim().toUpperCase(),
+      city: (raw.city || 'Lahore').trim(),
+      province: (raw.province || 'Punjab').trim(),
+      postalCode: raw.postalCode || '',
+      deliveryCharge:
+        raw.deliveryCharge !== undefined && raw.deliveryCharge !== null && raw.deliveryCharge !== ''
+          ? Number(raw.deliveryCharge)
+          : null,
+      chargeType: raw.chargeType || 'fixed',
+      freeDeliveryThreshold:
+        raw.freeDeliveryThreshold !== undefined &&
+        raw.freeDeliveryThreshold !== null &&
+        raw.freeDeliveryThreshold !== ''
+          ? Number(raw.freeDeliveryThreshold)
+          : null,
+      minDeliveryDays: raw.minDeliveryDays ? Number(raw.minDeliveryDays) : null,
+      maxDeliveryDays: raw.maxDeliveryDays ? Number(raw.maxDeliveryDays) : null,
+      codEnabled: raw.codEnabled !== false,
+      isRemoteArea: Boolean(raw.isRemoteArea),
+      remoteSurcharge: Number(raw.remoteSurcharge || 0),
+      isActive: raw.isActive !== false,
+      notes: raw.notes || '',
+      createdAt: raw.createdAt || now,
+      updatedAt: now,
+    };
+    const s = db.upsertDeliveryArea(item);
+    savedList.push(s);
+    if (supabaseService.isConfigured()) {
+      await supabaseService.saveDeliveryArea(s, db.getDeliveryAreas());
+    }
+  }
+  db.logAction(
+    'BULK_DELIVERY_AREAS',
+    (req as any).adminSession?.username || 'Admin',
+    `Bulk created/updated ${savedList.length} delivery areas`
+  );
+  return res.json({ success: true, count: savedList.length, areas: db.getDeliveryAreas() });
+});
+
+app.put('/api/delivery/areas/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  const existing = db.getDeliveryAreas().find((a) => a.id === req.params.id);
+  if (!existing) {
+    return res.status(404).json({ error: 'Delivery area not found' });
+  }
+  const updated = db.upsertDeliveryArea({
+    ...existing,
+    ...req.body,
+    id: existing.id,
+    updatedAt: new Date().toISOString(),
+  });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveDeliveryArea(updated, db.getDeliveryAreas());
+  }
+  db.logAction(
+    'DELIVERY_AREA_UPDATED',
+    (req as any).adminSession?.username || 'Admin',
+    `Updated delivery area: ${updated.name} (${updated.city})`
+  );
+  return res.json(updated);
+});
+
+app.delete('/api/delivery/areas/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  const existing = db.getDeliveryAreas().find((a) => a.id === req.params.id);
+  const ok = db.deleteDeliveryArea(req.params.id);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.deleteDeliveryArea(req.params.id, db.getDeliveryAreas());
+  }
+  if (existing) {
+    db.logAction(
+      'DELIVERY_AREA_DELETED',
+      (req as any).adminSession?.username || 'Admin',
+      `Deleted delivery area: ${existing.name}`
+    );
+  }
+  return res.json({ success: ok });
+});
+
+app.get('/api/delivery/settings', async (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  await hydrateDeliveryFromSupabase();
+  return res.json(db.getDeliverySettings());
+});
+
+app.put('/api/delivery/settings', requireAdminAuth, async (req: Request, res: Response) => {
+  const updated = db.updateDeliverySettings(req.body);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveDeliverySettings(updated);
+  }
+  db.logAction(
+    'DELIVERY_SETTINGS_UPDATED',
+    (req as any).adminSession?.username || 'Admin',
+    'Updated global delivery configuration, weight brackets, cut-off times & free delivery rules'
+  );
+  return res.json(updated);
+});
+
+// Live Checkout Delivery Calculation Endpoint (Trusted Backend Calculation)
+app.post('/api/delivery/calculate', async (req: Request, res: Response) => {
+  await Promise.all([hydrateDeliveryFromSupabase(), hydrateProductsFromSupabase()]);
+  const snapshot = db.calculateDelivery({
+    city: req.body.city,
+    province: req.body.province,
+    areaId: req.body.areaId,
+    areaName: req.body.areaName,
+    zoneId: req.body.zoneId,
+    postalCode: req.body.postalCode,
+    items: Array.isArray(req.body.items) ? req.body.items : [],
+    subtotal: req.body.subtotal !== undefined ? Number(req.body.subtotal) : undefined,
+    requestInstallation: Boolean(req.body.requestInstallation),
+  });
+  return res.json(snapshot);
+});
+
+// Delivery Analytics & Reports
+app.get('/api/delivery/reports', requireAdminAuth, async (_req: Request, res: Response) => {
+  await hydrateDeliveryFromSupabase();
+  const orders = db.getOrders().filter((o) => o.status !== 'Cancelled');
+  const byZone: Record<string, { orders: number; revenue: number; freeOrders: number }> = {};
+  const byArea: Record<string, { orders: number; revenue: number; remoteOrders: number }> = {};
+  let totalDeliveryRevenue = 0;
+  let freeDeliveryOrders = 0;
+  let remoteAreaOrders = 0;
+  let overrideOrders = 0;
+  let totalInstallationRevenue = 0;
+
+  for (const o of orders) {
+    const snap = o.deliverySnapshot;
+    const zName = snap?.zoneName || o.customer.zoneName || o.customer.province || 'Unassigned Zone';
+    const aName = snap?.areaName || o.customer.areaName || o.customer.city || 'General Area';
+    const fee = Number(o.shippingFee || 0);
+    const inst = Number(o.installationFee || snap?.installationCharge || 0);
+
+    totalDeliveryRevenue += fee;
+    totalInstallationRevenue += inst;
+    if (fee === 0 || snap?.freeDeliveryApplied) freeDeliveryOrders += 1;
+    if (snap?.isRemoteArea || (o.remoteSurcharge && o.remoteSurcharge > 0)) remoteAreaOrders += 1;
+    if (o.deliveryOverride) overrideOrders += 1;
+
+    if (!byZone[zName]) byZone[zName] = { orders: 0, revenue: 0, freeOrders: 0 };
+    byZone[zName].orders += 1;
+    byZone[zName].revenue += fee;
+    if (fee === 0) byZone[zName].freeOrders += 1;
+
+    if (!byArea[aName]) byArea[aName] = { orders: 0, revenue: 0, remoteOrders: 0 };
+    byArea[aName].orders += 1;
+    byArea[aName].revenue += fee;
+    if (snap?.isRemoteArea) byArea[aName].remoteOrders += 1;
+  }
+
+  return res.json({
+    totalOrders: orders.length,
+    totalDeliveryRevenue,
+    totalInstallationRevenue,
+    freeDeliveryOrders,
+    paidDeliveryOrders: Math.max(0, orders.length - freeDeliveryOrders),
+    remoteAreaOrders,
+    overrideOrders,
+    averageDeliveryCharge:
+      orders.length > 0 ? Math.round(totalDeliveryRevenue / orders.length) : 0,
+    byZone,
+    byArea,
+  });
+});
+
+// ==========================================
+// 11C. WARRANTY, SERVICE REQUESTS & SUPPORT TICKETS API
+// ==========================================
+
+app.get('/api/warranty', async (req: Request, res: Response) => {
+  if (supabaseService.isConfigured()) {
+    const s = await supabaseService.getWarranties();
+    if (s) db.syncWarrantyRegistrations(s);
+  }
+  const phone = req.query.phone as string | undefined;
+  const email = req.query.email as string | undefined;
+  let list = db.getWarrantyRegistrations();
+  if (phone || email) {
+    list = list.filter(
+      (w) =>
+        (phone && w.customerPhone.includes(phone.replace(/[^0-9]/g, ''))) ||
+        (email && (w.customerEmail || '').toLowerCase() === email.toLowerCase())
+    );
+  }
+  return res.json(list);
+});
+
+app.post('/api/warranty', async (req: Request, res: Response) => {
+  const now = new Date().toISOString();
+  const item: WarrantyRegistration = {
+    id: req.body.id || 'war-' + Date.now(),
+    orderNumber: (req.body.orderNumber || '').trim(),
+    productId: req.body.productId,
+    productName: (req.body.productName || '').trim(),
+    serialNumber: (req.body.serialNumber || '').trim(),
+    purchaseDate: req.body.purchaseDate || now.slice(0, 10),
+    warrantyPeriod: req.body.warrantyPeriod || '1 Year Official Warranty',
+    customerName: (req.body.customerName || '').trim(),
+    customerPhone: (req.body.customerPhone || '').trim(),
+    customerEmail: req.body.customerEmail || '',
+    city: req.body.city || 'Lahore',
+    status: req.body.status || 'Active',
+    adminNotes: req.body.adminNotes || '',
+    createdAt: now,
+    updatedAt: now,
+  };
+  const saved = db.upsertWarrantyRegistration(item);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveWarranty(saved, db.getWarrantyRegistrations());
+  }
+  return res.status(201).json(saved);
+});
+
+app.put('/api/warranty/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  const existing = db.getWarrantyRegistrations().find((w) => w.id === req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Warranty record not found' });
+  const updated = db.upsertWarrantyRegistration({
+    ...existing,
+    ...req.body,
+    id: existing.id,
+    updatedAt: new Date().toISOString(),
+  });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveWarranty(updated, db.getWarrantyRegistrations());
+  }
+  return res.json(updated);
+});
+
+app.get('/api/service-requests', async (req: Request, res: Response) => {
+  if (supabaseService.isConfigured()) {
+    const s = await supabaseService.getServiceRequests();
+    if (s) db.syncServiceRequests(s);
+  }
+  const phone = req.query.phone as string | undefined;
+  const email = req.query.email as string | undefined;
+  let list = db.getServiceRequests();
+  if (phone || email) {
+    list = list.filter(
+      (r) =>
+        (phone && r.customerPhone.includes(phone.replace(/[^0-9]/g, ''))) ||
+        (email && (r.customerEmail || '').toLowerCase() === email.toLowerCase())
+    );
+  }
+  return res.json(list);
+});
+
+app.post('/api/service-requests', async (req: Request, res: Response) => {
+  const now = new Date().toISOString();
+  const item: ServiceRequest = {
+    id: req.body.id || 'srv-' + Date.now(),
+    ticketNumber: req.body.ticketNumber || `MA-SRV-${Math.floor(1000 + Math.random() * 9000)}`,
+    requestType: req.body.requestType || 'Installation',
+    status: req.body.status || 'Submitted',
+    orderNumber: req.body.orderNumber || '',
+    productName: (req.body.productName || '').trim(),
+    serialNumber: req.body.serialNumber || '',
+    customerName: (req.body.customerName || '').trim(),
+    customerPhone: (req.body.customerPhone || '').trim(),
+    customerEmail: req.body.customerEmail || '',
+    address: (req.body.address || '').trim(),
+    city: req.body.city || 'Lahore',
+    preferredDate: req.body.preferredDate || '',
+    issueDescription: (req.body.issueDescription || '').trim(),
+    assignedTechnician: req.body.assignedTechnician || '',
+    adminNotes: req.body.adminNotes || '',
+    createdAt: now,
+    updatedAt: now,
+  };
+  const saved = db.upsertServiceRequest(item);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveServiceRequest(saved, db.getServiceRequests());
+  }
+  return res.status(201).json(saved);
+});
+
+app.put('/api/service-requests/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  const existing = db.getServiceRequests().find((s) => s.id === req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Service request not found' });
+  const updated = db.upsertServiceRequest({
+    ...existing,
+    ...req.body,
+    id: existing.id,
+    updatedAt: new Date().toISOString(),
+  });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveServiceRequest(updated, db.getServiceRequests());
+  }
+  return res.json(updated);
+});
+
+app.get('/api/support-tickets', async (req: Request, res: Response) => {
+  if (supabaseService.isConfigured()) {
+    const s = await supabaseService.getSupportTickets();
+    if (s) db.syncSupportTickets(s);
+  }
+  const email = req.query.email as string | undefined;
+  let list = db.getSupportTickets();
+  if (email) {
+    list = list.filter((t) => (t.customerEmail || '').toLowerCase() === email.toLowerCase());
+  }
+  return res.json(list);
+});
+
+app.post('/api/support-tickets', async (req: Request, res: Response) => {
+  const now = new Date().toISOString();
+  const item: SupportTicket = {
+    id: req.body.id || 'tkt-' + Date.now(),
+    ticketNumber: req.body.ticketNumber || `MA-SUP-${Math.floor(1000 + Math.random() * 9000)}`,
+    inquiryType: req.body.inquiryType || 'General Support',
+    subject: (req.body.subject || 'Customer Support Inquiry').trim(),
+    message: (req.body.message || '').trim(),
+    customerName: (req.body.customerName || '').trim(),
+    customerPhone: (req.body.customerPhone || '').trim(),
+    customerEmail: req.body.customerEmail || '',
+    orderOrQuoteRef: req.body.orderOrQuoteRef || '',
+    status: 'Open',
+    createdAt: now,
+    updatedAt: now,
+  };
+  const saved = db.upsertSupportTicket(item);
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveSupportTicket(saved, db.getSupportTickets());
+  }
+  return res.status(201).json(saved);
+});
+
+app.put('/api/support-tickets/:id', requireAdminAuth, async (req: Request, res: Response) => {
+  const existing = db.getSupportTickets().find((t) => t.id === req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Support ticket not found' });
+  const updated = db.upsertSupportTicket({
+    ...existing,
+    ...req.body,
+    id: existing.id,
+    updatedAt: new Date().toISOString(),
+  });
+  if (supabaseService.isConfigured()) {
+    await supabaseService.saveSupportTicket(updated, db.getSupportTickets());
+  }
+  return res.json(updated);
+});
+
+// ==========================================
 // 12. AI ASSISTANT API
 // ==========================================
 
-// Customer Shopping Chat
+// Customer Shopping Chat — M.A. SMART ASSISTANT
 app.post('/api/ai/chat', async (req: Request, res: Response) => {
   try {
-    const { message, history } = req.body;
+    const { message, history, customerAccount } = req.body;
     if (!message || typeof message !== 'string') {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    const result = await askShoppingAssistant(message, history || []);
+    const result = await askShoppingAssistant(message, history || [], customerAccount);
     return res.json({
       reply: result.reply,
       recommendedProductIds: result.recommendedProductIds,
@@ -1759,7 +3393,7 @@ app.post('/api/ai/chat', async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error('AI chat endpoint error:', err);
     return res.status(500).json({
-      error: 'AI assistant temporarily unavailable',
+      error: 'M.A. SMART ASSISTANT temporarily unavailable',
       message: err.message,
     });
   }
